@@ -102,8 +102,12 @@ def q2tag(qcode):
 def q2name(qcode, typ="full"):
     """
     Convert Wikidata Q-code to BCP-47 (full or short) language name.
+    Returns None if the intermediate tag is None.
     """
-    return langname(q2tag(qcode), typ)
+    tag = q2tag(qcode)
+    if tag is None:
+        return None
+    return langname(tag, typ)
 
 
 def lang2q(name):

@@ -30,8 +30,6 @@ def inverse_dict(dic):
 # Placeholders for illustration; these should be imported in practice.
 iso639short = {}  # 3-letter to 2-letter codes
 iso639retired = {}  # retired codes
-iso639long = inverse_dict(iso639short)
-iso639code_retired = inverse_dict(iso639retired)
 
 wiki_bcp47 = None  # Will be lazily initialized
 

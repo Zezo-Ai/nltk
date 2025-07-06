@@ -26,12 +26,9 @@ def inverse_dict(dic):
         warn("This dictionary has no bijective inverse mapping.")
 
 
-# Data dictionaries (imported or defined elsewhere, e.g., from lang_codes.py)
-# Placeholders for illustration; these should be imported in practice.
+# Placeholders:
 iso639short = {}  # 3-letter to 2-letter codes
 iso639retired = {}  # retired codes
-iso639long = inverse_dict(iso639short)
-iso639code_retired = inverse_dict(iso639retired)
 
 wiki_bcp47 = None  # Will be lazily initialized
 
@@ -104,8 +101,12 @@ def q2tag(qcode):
 def q2name(qcode, typ="full"):
     """
     Convert Wikidata Q-code to BCP-47 (full or short) language name.
+    Returns None if the intermediate tag is None.
     """
-    return langname(q2tag(qcode), typ)
+    tag = q2tag(qcode)
+    if tag is None:
+        return None
+    return langname(tag, typ)
 
 
 def lang2q(name):

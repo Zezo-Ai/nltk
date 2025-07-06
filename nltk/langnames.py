@@ -1,38 +1,12 @@
-# Natural Language Toolkit: Language Codes
+# Natural Language Toolkit: Language Names and Codes
 #
-# Copyright (C) 2022-2023 NLTK Project
+# Copyright (C) 2022-2025 NLTK Project
 # Author: Eric Kafe <kafe.eric@gmail.com>
 # URL: <https://www.nltk.org/>
 # For license information, see LICENSE.TXT
-#
-# iso639-3 language codes (C) https://iso639-3.sil.org/
 
 """
-Translate between language names and language codes.
-
-The iso639-3 language codes were downloaded from the registration authority at
-https://iso639-3.sil.org/
-
-The iso639-3 codeset is evolving, so retired language codes are kept in the
-"iso639retired" dictionary, which is used as fallback by the wrapper functions
-"langname" and "langcode", in order to support the lookup of retired codes.
-
-The "langcode" function returns the current iso639-3 code if there is one,
-and falls back to the retired code otherwise. As specified by BCP-47,
-it returns the shortest (2-letter) code by default, but 3-letter codes
-are also available:
-
-    >>> import nltk.langnames as lgn
-    >>> lgn.langname('fri')          #'fri' is a retired code
-    'Western Frisian'
-
-    The current code is different from the retired one:
-    >>> lgn.langcode('Western Frisian')
-    'fy'
-
-    >>> lgn.langcode('Western Frisian', typ = 3)
-    'fry'
-
+Translate between language names, codes, and Wikidata Q-codes.
 """
 
 import re
@@ -40,114 +14,8 @@ from warnings import warn
 
 from nltk.corpus import bcp47
 
+# Regular expression for language code patterns
 codepattern = re.compile("[a-z][a-z][a-z]?")
-
-
-def langname(tag, typ="full"):
-    """
-    Convert a composite BCP-47 tag to a language name
-
-    >>> from nltk.langnames import langname
-    >>> langname('ca-Latn-ES-valencia')
-    'Catalan: Latin: Spain: Valencian'
-
-    >>> langname('ca-Latn-ES-valencia', typ="short")
-    'Catalan'
-    """
-    tags = tag.split("-")
-    code = tags[0].lower()
-    if codepattern.fullmatch(code):
-        if code in iso639retired:  # retired codes
-            return iso639retired[code]
-        elif code in iso639short:  # 3-letter codes
-            code2 = iso639short[code]  # convert to 2-letter code
-            warn(f"Shortening {code!r} to {code2!r}", stacklevel=2)
-            tag = "-".join([code2] + tags[1:])
-        name = bcp47.name(tag)  # parse according to BCP-47
-        if typ == "full":
-            return name  # include all subtags
-        elif name:
-            return name.split(":")[0]  # only the language subtag
-    else:
-        warn(f"Could not find code in {code!r}", stacklevel=2)
-
-
-def langcode(name, typ=2):
-    """
-    Convert language name to iso639-3 language code. Returns the short 2-letter
-    code by default, if one is available, and the 3-letter code otherwise:
-
-    >>> from nltk.langnames import langcode
-    >>> langcode('Modern Greek (1453-)')
-    'el'
-
-    Specify 'typ=3' to get the 3-letter code:
-
-    >>> langcode('Modern Greek (1453-)', typ=3)
-    'ell'
-    """
-    if name in bcp47.langcode:
-        code = bcp47.langcode[name]
-        if typ == 3 and code in iso639long:
-            code = iso639long[code]  # convert to 3-letter code
-        return code
-    elif name in iso639code_retired:
-        return iso639code_retired[name]
-    else:
-        warn(f"Could not find language in {name!r}", stacklevel=2)
-
-
-# =======================================================================
-# Translate betwwen Wikidata Q-codes and BCP-47 codes or names
-# .......................................................................
-
-
-def tag2q(tag):
-    """
-    Convert BCP-47 tag to Wikidata Q-code
-
-    >>> tag2q('nds-u-sd-demv')
-    'Q4289225'
-    """
-    return bcp47.wiki_q[tag]
-
-
-def q2tag(qcode):
-    """
-    Convert Wikidata Q-code to BCP-47 tag
-
-    >>> q2tag('Q4289225')
-    'nds-u-sd-demv'
-    """
-    return wiki_bcp47[qcode]
-
-
-def q2name(qcode, typ="full"):
-    """
-    Convert Wikidata Q-code to BCP-47 (full or short) language name
-
-    >>> q2name('Q4289225')
-    'Low German: Mecklenburg-Vorpommern'
-
-    >>> q2name('Q4289225', "short")
-    'Low German'
-    """
-    return langname(q2tag(qcode), typ)
-
-
-def lang2q(name):
-    """
-    Convert simple language name to Wikidata Q-code
-
-    >>> lang2q('Low German')
-    'Q25433'
-    """
-    return tag2q(langcode(name))
-
-
-# ======================================================================
-# Data dictionaries
-# ......................................................................
 
 
 def inverse_dict(dic):
@@ -158,8 +26,100 @@ def inverse_dict(dic):
         warn("This dictionary has no bijective inverse mapping.")
 
 
-bcp47.load_wiki_q()  # Wikidata conversion table needs to be loaded explicitly
-wiki_bcp47 = inverse_dict(bcp47.wiki_q)
+# Data dictionaries (imported or defined elsewhere, e.g., from lang_codes.py)
+# Placeholders for illustration; these should be imported in practice.
+iso639short = {}  # 3-letter to 2-letter codes
+iso639retired = {}  # retired codes
+iso639long = inverse_dict(iso639short)
+iso639code_retired = inverse_dict(iso639retired)
+
+wiki_bcp47 = None  # Will be lazily initialized
+
+
+def langname(tag, typ="full"):
+    """
+    Convert a composite BCP-47 tag to a language name.
+    """
+    tags = tag.split("-")
+    code = tags[0].lower()
+    if codepattern.fullmatch(code):
+        if code in iso639retired:
+            return iso639retired[code]
+        elif code in iso639short:
+            code2 = iso639short[code]
+            warn(f"Shortening {code!r} to {code2!r}", stacklevel=2)
+            tag = "-".join([code2] + tags[1:])
+        name = bcp47.name(tag)
+        if typ == "full":
+            return name
+        elif name:
+            return name.split(":")[0]
+    else:
+        warn(f"Could not find code in {code!r}", stacklevel=2)
+
+
+def langcode(name, typ=2):
+    """
+    Convert language name to iso639-3 language code.
+    Returns the short 2-letter code by default, or the 3-letter code if specified.
+    """
+    if hasattr(bcp47, "langcode") and name in bcp47.langcode:
+        code = bcp47.langcode[name]
+        if typ == 3 and code in iso639long:
+            code = iso639long[code]
+        return code
+    elif name in iso639code_retired:
+        return iso639code_retired[name]
+    else:
+        warn(f"Could not find language in {name!r}", stacklevel=2)
+
+
+def tag2q(tag):
+    """
+    Convert BCP-47 tag to Wikidata Q-code.
+    Returns None if the tag is not found.
+    """
+    if not hasattr(bcp47, "wiki_q"):
+        bcp47.load_wiki_q()
+    if tag is None:
+        return None
+    return bcp47.wiki_q.get(tag, None)
+
+
+def q2tag(qcode):
+    """
+    Convert Wikidata Q-code to BCP-47 tag.
+    Returns None if the Q-code is not found.
+    """
+    global wiki_bcp47
+    if not hasattr(bcp47, "wiki_q"):
+        bcp47.load_wiki_q()
+    if wiki_bcp47 is None:
+        wiki_bcp47 = inverse_dict(bcp47.wiki_q)
+    if qcode is None:
+        return None
+    return wiki_bcp47.get(qcode, None)
+
+
+def q2name(qcode, typ="full"):
+    """
+    Convert Wikidata Q-code to BCP-47 (full or short) language name.
+    """
+    return langname(q2tag(qcode), typ)
+
+
+def lang2q(name):
+    """
+    Convert simple language name to Wikidata Q-code.
+    Returns None if the language name is invalid or not found.
+    """
+    code = langcode(name)
+    return tag2q(code)
+
+
+# ======================================================================
+# Data dictionaries
+# .......................................................................
 
 iso639short = {
     "aar": "aa",

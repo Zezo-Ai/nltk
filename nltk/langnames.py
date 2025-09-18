@@ -110,7 +110,7 @@ def tag2q(tag):
 
     >>> tag2q('nds-u-sd-demv')
     'Q4289225'
-    >>> tag2q('unknown-tag')
+    >>> print(tag2q('unknown-tag'))
     None
     """
     return bcp47.wiki_q.get(tag, None)
@@ -124,7 +124,7 @@ def q2tag(qcode):
 
     >>> q2tag('Q4289225')
     'nds-u-sd-demv'
-    >>> q2tag('Q0000000')
+    >>> print(q2tag('Q0000000'))
     None
     """
     return wiki_bcp47.get(qcode, None)

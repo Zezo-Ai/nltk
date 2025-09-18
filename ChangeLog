@@ -1,6 +1,11 @@
-Version 3.9.2 2025-03-10
+Version 3.9.2 2025-09-10
 
-* Minor fixes including:
+* Update download checksums to use SHA256 in built index
+* Fix percentage escape in new-style string formatting
+* replace shortened URLs using goo.gl
+* Make Wordnet interoperable with various taggers and tagged corpora
+* Fix saving PerceptronTagger
+* Document how to reproduce old Wordnet studies
 * properly initialize Portuguese corpus reader
 * support for mixed rules conversion into Chomsky Normal Form
 * only import tkinter if a GUI is needed
@@ -8,9 +13,10 @@ Version 3.9.2 2025-03-10
 * new environment variable NLTK_DOWNLOADER_FORCE_INTERACTIVE_SHELL
 * Lesk defaults to most frequent sense in case of ties
 
-Thanks to the following contributions to 3.9.2:
+Thanks to the following contributors to 3.9.2:
 Jose Cols, Peter de Blanc, GeneralPoxter, Eric Kafe, William LaCroix, Jason Liu,
-Samer Masterson, Mike014, purificant, Andrew Ernest Ritz, samertm, Ikram Ul Haq
+Samer Masterson, Mike014, purificant, Andrew Ernest Ritz, samertm, Ikram Ul Haq,
+Christopher Smith, Ryan Mannion
 
 Version 3.9.1 2024-08-19
 * Fixed bug that prevented wordnet from loading

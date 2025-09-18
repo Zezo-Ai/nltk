@@ -135,7 +135,7 @@ class MaltParser(ParserI):
         :param additional_java_args: This is the additional Java arguments that
             one can use when calling Maltparser, usually this is the heapsize
             limits, e.g. `additional_java_args=['-Xmx1024m']`
-            (see https://goo.gl/mpDBvQ)
+            (see https://javarevisited.blogspot.com/2011/05/java-heap-space-memory-size-jvm.html)
         :type additional_java_args: list
         """
 

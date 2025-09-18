@@ -294,10 +294,10 @@ class ChunkScore:
         """
         return (
             "ChunkParse score:\n"
-            + (f"    IOB Accuracy: {self.accuracy() * 100:5.1f}%%\n")
-            + (f"    Precision:    {self.precision() * 100:5.1f}%%\n")
-            + (f"    Recall:       {self.recall() * 100:5.1f}%%\n")
-            + (f"    F-Measure:    {self.f_measure() * 100:5.1f}%%")
+            + f"    IOB Accuracy: {self.accuracy() * 100:5.1f}%\n"
+            + f"    Precision:    {self.precision() * 100:5.1f}%\n"
+            + f"    Recall:       {self.recall() * 100:5.1f}%\n"
+            + f"    F-Measure:    {self.f_measure() * 100:5.1f}%"
         )
 
 

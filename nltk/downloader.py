@@ -169,7 +169,7 @@ import threading
 import time
 import warnings
 import zipfile
-from hashlib import md5
+from hashlib import md5, sha256
 from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
 from xml.etree import ElementTree
@@ -2251,6 +2251,27 @@ def _md5_hexdigest(fp):
     return md5_digest.hexdigest()
 
 
+def sha256_hexdigest(file):
+    """
+    Calculate and return the SHA-256 checksum for a given file.
+    ``file`` may either be a filename or an open stream.
+    """
+    if isinstance(file, str):
+        with open(file, "rb") as infile:
+            return _sha256_hexdigest(infile)
+    return _sha256_hexdigest(file)
+
+
+def _sha256_hexdigest(fp):
+    sha256_digest = sha256()
+    while True:
+        block = fp.read(1024 * 16)  # 16k blocks
+        if not block:
+            break
+        sha256_digest.update(block)
+    return sha256_digest.hexdigest()
+
+
 # change this to periodically yield progress messages?
 # [xx] get rid of topdir parameter -- we should be checking
 # this when we build the index, anyway.
@@ -2331,6 +2352,7 @@ def build_index(root, base_url):
         pkg_xml.set("unzipped_size", "%s" % unzipped_size)
         pkg_xml.set("size", "%s" % zipstat.st_size)
         pkg_xml.set("checksum", "%s" % md5_hexdigest(zf.filename))
+        pkg_xml.set("sha256_checksum", "%s" % sha256_hexdigest(zf.filename))
         pkg_xml.set("subdir", subdir)
         # pkg_xml.set('svn_revision', _svn_revision(zf.filename))
         if not pkg_xml.get("url"):

@@ -1,6 +1,6 @@
 # Natural Language Toolkit: Language Codes
 #
-# Copyright (C) 2022-2023 NLTK Project
+# Copyright (C) 2022-2025 NLTK Project
 # Author: Eric Kafe <kafe.eric@gmail.com>
 # URL: <https://www.nltk.org/>
 # For license information, see LICENSE.TXT
@@ -104,20 +104,28 @@ def langcode(name, typ=2):
 
 def tag2q(tag):
     """
-    Convert BCP-47 tag to Wikidata Q-code
+    Convert BCP-47 tag to Wikidata Q-code.
+
+    Returns the Wikidata Q-code for the given BCP-47 tag, or None if the tag is not found.
 
     >>> tag2q('nds-u-sd-demv')
     'Q4289225'
+    >>> tag2q('unknown-tag')
+    None
     """
     return bcp47.wiki_q.get(tag, None)
 
 
 def q2tag(qcode):
     """
-    Convert Wikidata Q-code to BCP-47 tag
+    Convert Wikidata Q-code to BCP-47 tag.
+
+    Returns the BCP-47 tag for the given Wikidata Q-code, or None if the Q-code is not found.
 
     >>> q2tag('Q4289225')
     'nds-u-sd-demv'
+    >>> q2tag('Q0000000')
+    None
     """
     return wiki_bcp47.get(qcode, None)
 

@@ -102,6 +102,18 @@ def langcode(name, typ=2):
 # .......................................................................
 
 
+def inverse_dict(dic):
+    """Return inverse mapping, but only if it is bijective"""
+    if len(dic.keys()) == len(set(dic.values())):
+        return {val: key for (key, val) in dic.items()}
+    else:
+        warn("This dictionary has no bijective inverse mapping.")
+
+
+bcp47.load_wiki_q()  # Wikidata conversion table needs to be loaded explicitly
+wiki_bcp47 = inverse_dict(bcp47.wiki_q)
+
+
 def tag2q(tag):
     """
     Convert BCP-47 tag to Wikidata Q-code.
@@ -157,17 +169,6 @@ def lang2q(name):
 # Data dictionaries
 # ......................................................................
 
-
-def inverse_dict(dic):
-    """Return inverse mapping, but only if it is bijective"""
-    if len(dic.keys()) == len(set(dic.values())):
-        return {val: key for (key, val) in dic.items()}
-    else:
-        warn("This dictionary has no bijective inverse mapping.")
-
-
-bcp47.load_wiki_q()  # Wikidata conversion table needs to be loaded explicitly
-wiki_bcp47 = inverse_dict(bcp47.wiki_q)
 
 iso639short = {
     "aar": "aa",

@@ -40,9 +40,6 @@ from warnings import warn
 
 from nltk.corpus import bcp47
 
-# bcp47.load_wiki_q()  # Wikidata conversion table needs to be loaded explicitly
-# wiki_bcp47 = inverse_dict(bcp47.wiki_q)
-
 codepattern = re.compile("[a-z][a-z][a-z]?")
 
 
@@ -117,7 +114,7 @@ def tag2q(tag):
     None
     """
     if not hasattr(bcp47, "wiki_q") or bcp47.wiki_q is None:
-        bcp47.load_wiki_q()
+        bcp47.load_wiki_q()  # Wikidata conversion table needs to be loaded explicitly
     return bcp47.wiki_q.get(tag, None)
 
 
@@ -141,7 +138,7 @@ def q2tag(qcode):
     None
     """
     if not hasattr(bcp47, "wiki_q") or bcp47.wiki_q is None:
-        bcp47.load_wiki_q()
+        bcp47.load_wiki_q()  # Wikidata conversion table needs to be loaded explicitly
     if not hasattr(bcp47, "wiki_bcp47") or bcp47.wiki_bcp47 is None:
         bcp47.wiki_bcp47 = inverse_dict(bcp47.wiki_q)
     return bcp47.wiki_bcp47.get(qcode, None)

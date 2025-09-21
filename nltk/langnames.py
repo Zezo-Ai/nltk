@@ -126,9 +126,6 @@ def tag2q(tag):
     >>> print(tag2q('unknown-tag'))
     None
     """
-    #    wiki_q = getattr(bcp47, "wiki_q", None)
-    #    if wiki_q is None:
-    #        bcp47.load_wiki_q()  # Wikidata conversion table needs to be loaded explicitly
     return bcp47.wiki_q.get(tag, None)
 
 
@@ -143,12 +140,6 @@ def q2tag(qcode):
     >>> print(q2tag('Q0000000'))
     None
     """
-    #    wiki_q = getattr(bcp47, "wiki_q", None)
-    #    if wiki_q is None:
-    #        bcp47.load_wiki_q()  # Wikidata conversion table needs to be loaded explicitly
-    #    wiki_bcp47 = getattr(bcp47, "wiki_bcp47", None)
-    #    if wiki_bcp47 is None:
-    #        wiki_bcp47 = inverse_dict(bcp47.wiki_q)
     return wiki_bcp47.get(qcode, None)
 
 

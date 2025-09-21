@@ -40,18 +40,8 @@ from warnings import warn
 
 from nltk.corpus import bcp47
 
-bcp47.load_wiki_q()  # Wikidata conversion table needs to be loaded explicitly
-
-
-def inverse_dict(dic):
-    """Return inverse mapping, but only if it is bijective"""
-    if len(dic.keys()) == len(set(dic.values())):
-        return {val: key for (key, val) in dic.items()}
-    else:
-        warn("This dictionary has no bijective inverse mapping.")
-
-
-wiki_bcp47 = inverse_dict(bcp47.wiki_q)
+# bcp47.load_wiki_q()  # Wikidata conversion table needs to be loaded explicitly
+# wiki_bcp47 = inverse_dict(bcp47.wiki_q)
 
 codepattern = re.compile("[a-z][a-z][a-z]?")
 
@@ -126,7 +116,17 @@ def tag2q(tag):
     >>> print(tag2q('unknown-tag'))
     None
     """
+    if not hasattr(bcp47, "wiki_q") or bcp47.wiki_q is None:
+        bcp47.load_wiki_q()
     return bcp47.wiki_q.get(tag, None)
+
+
+def inverse_dict(dic):
+    """Return inverse mapping, but only if it is bijective"""
+    if len(dic.keys()) == len(set(dic.values())):
+        return {val: key for (key, val) in dic.items()}
+    else:
+        warn("This dictionary has no bijective inverse mapping.")
 
 
 def q2tag(qcode):
@@ -140,7 +140,11 @@ def q2tag(qcode):
     >>> print(q2tag('Q0000000'))
     None
     """
-    return wiki_bcp47.get(qcode, None)
+    if not hasattr(bcp47, "wiki_q") or bcp47.wiki_q is None:
+        bcp47.load_wiki_q()
+    if not hasattr(bcp47, "wiki_bcp47") or bcp47.wiki_bcp47 is None:
+        bcp47.wiki_bcp47 = inverse_dict(bcp47.wiki_q)
+    return bcp47.wiki_bcp47.get(qcode, None)
 
 
 def q2name(qcode, typ="full"):

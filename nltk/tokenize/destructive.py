@@ -85,7 +85,8 @@ class NLTKWordTokenizer(TokenizerI):
             re.compile(r"\.{2,}", re.U),
             r" \g<0> ",
         ),  # See https://github.com/nltk/nltk/pull/2322
-        (re.compile(r"[;@#$%&]"), r" \g<0> "),
+        (re.compile(r"[;@#$%&]"), r" \g<0> 
+        (re.compile(r"\u2014", re.U), r" \g<0> "), # \u2014 handles emdashes
         (
             re.compile(r'([^\.])(\.)([\]\)}>"\']*)\s*$'),
             r"\1 \2\3 ",

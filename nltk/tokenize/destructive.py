@@ -86,7 +86,7 @@ class NLTKWordTokenizer(TokenizerI):
             r" \g<0> ",
         ),  # See https://github.com/nltk/nltk/pull/2322
         (re.compile(r"[;@#$%&]"), r" \g<0> "),
-        (re.compile(r"\u2014", re.UNICODE), r" \g<0> "),  # \u2014 handles emdashes
+        (re.compile(r"[\u2012-\u2015]", re.UNICODE), r" \g<0> "),  # Handles figure dash, en dashes, em dashes and horizontal bars
         (
             re.compile(r'([^\.])(\.)([\]\)}>"\']*)\s*$'),
             r"\1 \2\3 ",

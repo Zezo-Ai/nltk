@@ -440,6 +440,35 @@ class TestTokenize:
         ]
         assert word_tokenize(text) == expected
 
+    def test_dash_tokenization(self):
+        """
+        Test for em-dashes and en-dashes (Issue #3459)
+        """
+        tokenizer = NLTKWordTokenizer()
+
+        # Test case from Issue #3459 (Em-Dash: \u2014)
+        s_em = "The food—which was delicious—reminded me of home."
+        expected_em = [
+            'The', 'food', '—', 'which', 'was', 'delicious',
+            '—', 'reminded', 'me', 'of', 'home', '.'
+        ]
+        self.assertEqual(tokenizer.tokenize(s_em), expected_em)
+
+        # Test case for En-Dash (\u2013)
+        s_en = "The score was 3–1."
+        expected_en = ['The', 'score', 'was', '3', '–', '1', '.']
+        self.assertEqual(tokenizer.tokenize(s_en), expected_en)
+        
+        # Test case for Horizontal Bar (\u2015)
+        s_bar = "He said — wait for it — a new thing."
+        expected_bar = ['He', 'said', '—', 'wait', 'for', 'it', '—', 'a', 'new', 'thing', '.']
+        self.assertEqual(tokenizer.tokenize(s_bar), expected_bar)
+        
+        # Test case for Figure Dash (\u2012)
+        s_fig = "The number is 12‒34."
+        expected_fig = ['The', 'number', 'is', '12', '‒', '34', '.']
+        self.assertEqual(tokenizer.tokenize(s_fig), expected_fig)
+
     def test_pad_dotdot(self):
         """
         Test padding of dotdot* for word tokenization.

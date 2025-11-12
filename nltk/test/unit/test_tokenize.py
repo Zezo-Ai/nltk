@@ -469,15 +469,15 @@ class TestTokenize:
         assert word_tokenize(s_en) == expected_en
 
         # Test case for Horizontal Bar (\u2015)
-        s_bar = "He said — wait for it — a new thing."
+        s_bar = "He said ― wait for it ― a new thing."
         expected_bar = [
             "He",
             "said",
-            "—",
+            "―",
             "wait",
             "for",
             "it",
-            "—",
+            "―",
             "a",
             "new",
             "thing",
@@ -489,6 +489,9 @@ class TestTokenize:
         s_fig = "The number is 12‒34."
         expected_fig = ["The", "number", "is", "12", "‒", "34", "."]
         assert word_tokenize(s_fig) == expected_fig
+
+        # Regression guard for hyphen-minus
+        assert word_tokenize("state-of-the-art") == ["state-of-the-art"]
 
     def test_pad_dotdot(self):
         """

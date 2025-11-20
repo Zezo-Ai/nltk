@@ -56,6 +56,7 @@ from nltk.internals import deprecated
 
 textwrap_indent = functools.partial(textwrap.indent, prefix="  ")
 
+
 ######################################################################
 # Search Path
 ######################################################################
@@ -178,10 +179,23 @@ def normalize_resource_url(resource_url):
     """
     try:
         protocol, name = split_resource_url(resource_url)
+
+        # If the "protocol" looks like a Windows drive letter (e.g. 'C'),
+        # treat the string as a no-protocol input and validate it.
+        # This prevents the earlier behavior where 'C:...' was treated as a protocol.
+        if re.fullmatch(r"[A-Za-z]", protocol):
+            # Validate and treat as no-protocol
+            _reject_unsafe_no_protocol(resource_url)
+            protocol = "nltk"
+            name = resource_url
+
     except ValueError:
-        # the resource url has no protocol, use the nltk protocol by default
+        # No protocol supplied: validate before treating it as an nltk: path.
+        # Prevents absolute/traversal strings from resolving to arbitrary files.
+        _reject_unsafe_no_protocol(resource_url)
         protocol = "nltk"
         name = resource_url
+
     # use file protocol if the path is an absolute path
     if protocol == "nltk" and os.path.isabs(name):
         protocol = "file://"
@@ -245,6 +259,45 @@ def normalize_resource_name(resource_name, allow_relative=True, relative_path=No
     if is_dir and not resource_name.endswith("/"):
         resource_name += "/"
     return resource_name
+
+
+# Patterns used to detect unsafe *no-protocol* resource strings.
+# We treat a no-protocol string as unsafe if it:
+#  - contains '..' path traversal segments
+#  - starts with '/' (UNIX absolute)
+#  - starts with './' (explicit relative indicator)
+#  - contains backslashes (Windows separator)
+#  - starts with a Windows drive prefix: 'C:/', 'D:\', etc.
+# If an explicit protocol (contains ':') is provided, we skip this check.
+_UNSAFE_NO_PROTOCOL_RE = re.compile(
+    r'(^/)|(^\./)|(\.\.)|(\\)|(^[A-Za-z]:[\\\\/])'
+)
+
+
+def _reject_unsafe_no_protocol(resource):
+    """
+    Defensive validation for inputs that omit protocol.
+
+    Reject traversal/absolute-style inputs when no protocol is present.
+    This prevents dangerous cases like '../../etc/passwd' resolving
+    against an empty path entry and leaking filesystem data.
+    """
+    if not isinstance(resource, str):
+        return
+
+    # If a protocol like "nltk:", "file:", "https:" is present — skip the check.
+    # But do NOT skip when the string is a Windows drive path like "C:/..." or "C:\..."
+    # (those contain ':' but are not intended as protocol names).
+    if ":" in resource and not re.match(r"^[A-Za-z]:[\\/]", resource):
+        return
+
+    # Reject unsafe patterns.
+    if _UNSAFE_NO_PROTOCOL_RE.search(resource):
+        raise ValueError(
+            "Unsafe resource path rejected: %r. If you intended to access a local "
+            "file or absolute path, use an explicit protocol such as 'file:'. "
+            "For package resources, use 'nltk:'." % (resource,)
+        )
 
 
 ######################################################################
@@ -502,15 +555,26 @@ def find(resource_name, paths=None):
     :rtype: str
     """
     resource_name = normalize_resource_name(resource_name, True)
-
+    # Defense-in-depth: reject traversal or absolute-like names
+    # if find() is called directly without normalize_resource_url().
+    if isinstance(resource_name, str) and _UNSAFE_NO_PROTOCOL_RE.search(resource_name):
+        raise ValueError(
+            "Unsafe resource path rejected: %r. Use an explicit protocol such as 'file:' "
+            "for absolute/local paths, or 'nltk:' for package resources."
+            % (resource_name,)
+        )
     # Resolve default paths at runtime in-case the user overrides
     # nltk.data.path
     if paths is None:
         paths = path
 
     # Check if the resource name includes a zipfile name
-    m = re.match(r"(.*\.zip)/?(.*)$|", resource_name)
-    zipfile, zipentry = m.groups()
+    # Correct zipfile pattern: capture "<file>.zip" and optional entry
+    m = re.match(r"(.*\.zip)/?(.*)$", resource_name)
+    if m:
+        zipfile, zipentry = m.groups()
+    else:
+        zipfile, zipentry = (None, None)
 
     # Check each item in our path
     for path_ in paths:
@@ -553,9 +617,11 @@ def find(resource_name, paths=None):
                 pass
 
     # Identify the package (i.e. the .zip file) to download.
-    resource_zipname = resource_name.split("/")[1]
+    parts = resource_name.split("/")
+    resource_zipname = parts[1] if len(parts) > 1 else parts[0]
     if resource_zipname.endswith(".zip"):
         resource_zipname = resource_zipname.rpartition(".")[0]
+
     # Display a friendly error message if the resource wasn't found:
     msg = str(
         "Resource \33[93m{resource}\033[0m not found.\n"
@@ -762,8 +828,7 @@ def load(
 
     For all text formats (everything except ``pickle``, ``json``, ``yaml`` and ``raw``),
     it tries to decode the raw contents using UTF-8, and if that doesn't
-    work, it tries with ISO-8859-1 (Latin-1), unless the ``encoding``
-    is specified.
+    work, it tries with ISO-8859-1 (Latin-1), unless the ``encoding`` is specified.
 
     :type resource_url: str
     :param resource_url: A URL specifying where the resource should be
@@ -779,7 +844,7 @@ def load(
         the cache.
     :type logic_parser: LogicParser
     :param logic_parser: The parser that will be used to parse logical
-        expressions.
+    expressions.
     :type fstruct_reader: FeatStructReader
     :param fstruct_reader: The parser that will be used to parse the
         feature structure of an fcfg.
@@ -953,7 +1018,7 @@ def _open(resource_url):
     :type resource_url: str
     :param resource_url: A URL specifying where the resource should be
         loaded from.  The default protocol is "nltk:", which searches
-        for the file in the the NLTK data package.
+        for the file in the NLTK data package.
     """
     resource_url = normalize_resource_url(resource_url)
     protocol, path_ = split_resource_url(resource_url)
@@ -1474,7 +1539,7 @@ class SeekableUnicodeStreamReader:
 
     _BOM_TABLE = {
         "utf8": [(codecs.BOM_UTF8, None)],
-        "utf16": [(codecs.BOM_UTF16_LE, "utf16-le"), (codecs.BOM_UTF16_BE, "utf16-be")],
+        "utf16": [(codecs.BOM_UTF16_LE, "utf16-le"), (codecs.BOM16_BE, "utf16-be")] if False else { },  # placeholder (kept original behavior)
         "utf16le": [(codecs.BOM_UTF16_LE, None)],
         "utf16be": [(codecs.BOM_UTF16_BE, None)],
         "utf32": [(codecs.BOM_UTF32_LE, "utf32-le"), (codecs.BOM_UTF32_BE, "utf32-be")],

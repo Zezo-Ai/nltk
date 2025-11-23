@@ -2286,263 +2286,190 @@ def unzip(filename, root, verbose=True):
             raise Exception(message.message)
 
 
-def _unzip_iter(
-    filename, root, verbose=True, max_unzipped_bytes=1 * 1024 * 1024 * 1024
+def _safe_extractall(
+    zf,
+    filename,
+    root,
+    verbose=True,
+    max_unzipped_bytes=1 * 1024 * 1024 * 1024,
 ):
     """
-    Secure replacement for ZipFile.extractall that:
-      - defends against path traversal, absolute paths, drive letters
-      - blocks symlinks inside the archive
-      - enforces a total-uncompressed-bytes limit (simple zip-bomb protection)
-      - extracts into a temp dir and then moves contents into place
+    Secure extraction helper to prevent:
+      - Zip-Slip (path traversal)
+      - absolute paths / drive-letter escapes
+      - symlink abuse
+      - zip bombs (via uncompressed size cap)
 
-    Yields ProgressMessage(progress:int) and ErrorMessage instances.
+    Extracts safely into a temporary directory, then moves contents
+    into the target root.
+
+    Yields ProgressMessage or ErrorMessage.
+    """
+
+    # Ensure root exists
+    try:
+        os.makedirs(root, exist_ok=True)
+    except Exception as e:
+        yield ErrorMessage(filename, f"Could not create extraction root: {e}")
+        return
+
+    root_real = os.path.realpath(root)
+    total_unzipped = 0
+
+    # Estimate total uncompressed size
+    try:
+        total_uncompressed = sum(m.file_size for m in zf.infolist())
+        if total_uncompressed <= 0:
+            total_uncompressed = None
+    except Exception:
+        total_uncompressed = None
+
+    # Temporary extraction directory
+    parent = os.path.dirname(root_real) or "."
+    tmpdir = os.path.join(parent, f".tmp_nltk_unzip_{int(time.time()*1000)}")
+
+    if os.path.exists(tmpdir):
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+    try:
+        os.makedirs(tmpdir, exist_ok=False)
+    except Exception as e:
+        yield ErrorMessage(filename, f"Could not create temp dir {tmpdir!r}: {e}")
+        return
+
+    # ---- extract entries one-by-one ----
+    for member in zf.infolist():
+        name = member.filename
+
+        if not isinstance(name, str) or not name.strip():
+            continue
+
+        norm = name.replace("\\", "/")
+
+        # Absolute path protection
+        if norm.startswith("/") or norm.startswith("\\"):
+            shutil.rmtree(tmpdir, ignore_errors=True)
+            yield ErrorMessage(filename, f"Unsafe zip entry (absolute path): {name!r}")
+            return
+
+        # Drive letter protection
+        first = norm.split("/")[0]
+        if ":" in first:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+            yield ErrorMessage(filename, f"Unsafe zip entry (drive letter): {name!r}")
+            return
+
+        # Traversal protection
+        parts = [p for p in norm.split("/") if p and p != "."]
+        if ".." in parts:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+            yield ErrorMessage(filename, f"Unsafe zip entry (path traversal): {name!r}")
+            return
+
+        # Symlink detection (Unix external_attr)
+        try:
+            mode = (member.external_attr >> 16) & 0o170000
+            if mode == 0o120000:
+                shutil.rmtree(tmpdir, ignore_errors=True)
+                yield ErrorMessage(filename, f"Unsafe zip entry (symlink): {name!r}")
+                return
+        except Exception:
+            pass
+
+        # Build target inside tmpdir
+        target_path = os.path.join(tmpdir, *parts)
+        try:
+            os.makedirs(os.path.dirname(target_path), exist_ok=True)
+        except Exception:
+            pass
+
+        # Copy content safely
+        try:
+            if member.is_dir():
+                os.makedirs(target_path, exist_ok=True)
+            else:
+                with zf.open(member, "r") as src, open(target_path, "wb") as dst:
+                    while True:
+                        chunk = src.read(16 * 1024)
+                        if not chunk:
+                            break
+                        dst.write(chunk)
+                        total_unzipped += len(chunk)
+
+                        # Zip bomb limit
+                        if total_unzipped > max_unzipped_bytes:
+                            raise ValueError("Exceeded max unzipped bytes")
+
+            # Progress
+            if total_uncompressed:
+                pct = int(min(100, (total_unzipped * 100) // total_uncompressed))
+                yield ProgressMessage(pct)
+            else:
+                yield ProgressMessage(0)
+
+        except Exception as e:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+            yield ErrorMessage(filename, f"Extraction error for {name!r}: {e}")
+            return
+
+    # Validate all final target paths
+    for folder, dirs, files in os.walk(tmpdir):
+        for item in dirs + files:
+            src = os.path.join(folder, item)
+            rel = os.path.relpath(src, tmpdir)
+            dest = os.path.join(root, rel)
+            if not os.path.realpath(dest).startswith(root_real):
+                shutil.rmtree(tmpdir, ignore_errors=True)
+                yield ErrorMessage(filename, f"Unsafe final path {rel!r}")
+                return
+
+    # Move extracted files into final root
+    for item in os.listdir(tmpdir):
+        src = os.path.join(tmpdir, item)
+        dst = os.path.join(root, item)
+
+        if os.path.exists(dst):
+            if os.path.isdir(dst) and os.path.isdir(src):
+                shutil.copytree(src, dst, dirs_exist_ok=True)
+            else:
+                try:
+                    if os.path.isdir(dst):
+                        shutil.rmtree(dst)
+                    else:
+                        os.remove(dst)
+                except Exception:
+                    pass
+
+        shutil.move(src, dst)
+
+    shutil.rmtree(tmpdir, ignore_errors=True)
+    yield ProgressMessage(100)
+
+
+def _unzip_iter(filename, root, verbose=True):
+    """
+    Wrapper that delegates secure extraction to _safe_extractall().
     """
     if verbose:
         sys.stdout.write("Unzipping %s" % os.path.split(filename)[1])
         sys.stdout.flush()
 
     try:
-        zf = zipfile.ZipFile(filename)
-    except zipfile.BadZipFile:
-        yield ErrorMessage(filename, "Error with downloaded zip file")
-        return
+        zf = zipfile.ZipFile(filename, "r")
     except Exception as e:
-        yield ErrorMessage(filename, e)
+        yield ErrorMessage(filename, f"Could not open zip file: {e}")
         return
 
-    # Ensure root exists (create if necessary)
-    try:
-        os.makedirs(root, exist_ok=True)
-    except Exception as e:
-        zf.close()
-        yield ErrorMessage(filename, f"Could not create extraction root {root!r}: {e}")
-        return
-
-    root_real = os.path.realpath(root)
-    tmpdir = None
-    total_unzipped = 0
+    # Delegate to the new safe extractor
+    yield from _safe_extractall(zf, filename, root, verbose=verbose)
 
     try:
-        # compute total uncompressed size for progress reporting (best-effort)
-        try:
-            total_uncompressed = sum(mi.file_size for mi in zf.infolist())
-            if total_uncompressed <= 0:
-                total_uncompressed = None
-        except Exception:
-            total_uncompressed = None
-
-        # create a temp extraction dir next to final root for atomic move
-        parent = os.path.dirname(root_real) or "."
-        tmpdir = os.path.join(parent, f".tmp_nltk_unzip_{int(time.time() * 1000)}")
-        if os.path.exists(tmpdir):
-            shutil.rmtree(tmpdir)
-        os.makedirs(tmpdir, exist_ok=False)
-
-        for member in zf.infolist():
-            name = member.filename
-
-            # skip empty or non-string names
-            if not isinstance(name, str) or name.strip() == "":
-                continue
-
-            # Normalize path separators
-            norm_name = name.replace("\\", "/")
-
-            # Reject absolute paths and drive-letter components
-            if norm_name.startswith("/") or norm_name.startswith("\\"):
-                zf.close()
-                try:
-                    shutil.rmtree(tmpdir)
-                except Exception:
-                    pass
-                yield ErrorMessage(
-                    filename, f"Unsafe zip entry blocked (absolute path): {name!r}"
-                )
-                return
-            if ":" in norm_name.split("/")[0]:
-                zf.close()
-                try:
-                    shutil.rmtree(tmpdir)
-                except Exception:
-                    pass
-                yield ErrorMessage(
-                    filename, f"Unsafe zip entry blocked (drive spec): {name!r}"
-                )
-                return
-
-            # Reject traversal segments
-            parts = [p for p in norm_name.split("/") if p and p != "."]
-            if ".." in parts:
-                zf.close()
-                try:
-                    shutil.rmtree(tmpdir)
-                except Exception:
-                    pass
-                yield ErrorMessage(
-                    filename, f"Unsafe zip entry blocked (path traversal): {name!r}"
-                )
-                return
-
-            # Build the target path under tmpdir
-            target_path = os.path.join(tmpdir, *parts)
-            target_dir = os.path.dirname(target_path)
-            if target_dir:
-                os.makedirs(target_dir, exist_ok=True)
-
-            # Detect symlink entries (best-effort; unix external_attr)
-            is_symlink = False
-            try:
-                if hasattr(member, "external_attr"):
-                    mode = (member.external_attr >> 16) & 0xFFFF
-                    # 0o120000 is symlink in unix file types
-                    if (mode & 0o170000) == 0o120000:
-                        is_symlink = True
-            except Exception:
-                is_symlink = False
-
-            if is_symlink:
-                zf.close()
-                try:
-                    shutil.rmtree(tmpdir)
-                except Exception:
-                    pass
-                yield ErrorMessage(
-                    filename, f"Unsafe zip entry blocked (symlink): {name!r}"
-                )
-                return
-
-            # Extract member safely streaming (don't load whole file into memory)
-            try:
-                if member.is_dir():
-                    os.makedirs(target_path, exist_ok=True)
-                else:
-                    with zf.open(member, "r") as src, open(target_path, "wb") as dst:
-                        while True:
-                            chunk = src.read(1024 * 16)
-                            if not chunk:
-                                break
-                            dst.write(chunk)
-                            total_unzipped += len(chunk)
-                            if total_unzipped > max_unzipped_bytes:
-                                raise ValueError(
-                                    "Exceeded maximum allowed unzipped bytes"
-                                )
-
-                # try to preserve permission bits if present
-                try:
-                    if hasattr(member, "external_attr"):
-                        mode = (member.external_attr >> 16) & 0xFFFF
-                        if mode:
-                            os.chmod(target_path, mode)
-                except Exception:
-                    # best-effort only
-                    pass
-
-                # Emit progress as a ProgressMessage (0-100)
-                if total_uncompressed:
-                    percent = int(
-                        min(100, (total_unzipped * 100) // total_uncompressed)
-                    )
-                    yield ProgressMessage(percent)
-                else:
-                    # unknown total size: emit small progress nudges
-                    yield ProgressMessage(0)
-
-            except Exception as e:
-                zf.close()
-                try:
-                    shutil.rmtree(tmpdir)
-                except Exception:
-                    pass
-                yield ErrorMessage(filename, f"Error extracting member {name!r}: {e}")
-                return
-
-        # Verify that nothing in tmpdir would escape the intended root when moved
-        for walk_root, dirs, files in os.walk(tmpdir):
-            for entry in dirs + files:
-                src = os.path.join(walk_root, entry)
-                rel = os.path.relpath(src, tmpdir)
-                dest = os.path.join(root, rel)
-                dest_real = os.path.realpath(dest)
-                if not dest_real.startswith(root_real):
-                    zf.close()
-                    try:
-                        shutil.rmtree(tmpdir)
-                    except Exception:
-                        pass
-                    yield ErrorMessage(
-                        filename, f"Unsafe extraction path detected for {rel!r}"
-                    )
-                    return
-
-        # Move/merge tmpdir contents into final root atomically-ish
-        for entry in os.listdir(tmpdir):
-            src_entry = os.path.join(tmpdir, entry)
-            dst_entry = os.path.join(root, entry)
-            if os.path.exists(dst_entry):
-                # If both are dirs, merge; otherwise replace
-                if os.path.isdir(dst_entry) and os.path.isdir(src_entry):
-                    for top, _, names in os.walk(src_entry):
-                        rel = os.path.relpath(top, src_entry)
-                        target_top = (
-                            os.path.join(dst_entry, rel) if rel != "." else dst_entry
-                        )
-                        os.makedirs(target_top, exist_ok=True)
-                        for name in names:
-                            s = os.path.join(top, name)
-                            d = os.path.join(target_top, name)
-                            if os.path.exists(d):
-                                try:
-                                    if os.path.isdir(d):
-                                        shutil.rmtree(d)
-                                    else:
-                                        os.remove(d)
-                                except Exception:
-                                    pass
-                            shutil.move(s, d)
-                    try:
-                        shutil.rmtree(src_entry)
-                    except Exception:
-                        pass
-                else:
-                    try:
-                        if os.path.isdir(dst_entry):
-                            shutil.rmtree(dst_entry)
-                        else:
-                            os.remove(dst_entry)
-                    except Exception:
-                        pass
-                    shutil.move(src_entry, dst_entry)
-            else:
-                shutil.move(src_entry, dst_entry)
-
-        # final progress = 100
-        yield ProgressMessage(100)
-
-        # Clean up tempdir
-        try:
-            if os.path.exists(tmpdir):
-                shutil.rmtree(tmpdir)
-        except Exception:
-            pass
-
         zf.close()
-        if verbose:
-            print()
+    except Exception:
+        pass
 
-    except Exception as e:
-        try:
-            zf.close()
-        except Exception:
-            pass
-        try:
-            if tmpdir and os.path.exists(tmpdir):
-                shutil.rmtree(tmpdir)
-        except Exception:
-            pass
-        yield ErrorMessage(filename, f"Unexpected error extracting zip: {e}")
-        return
+    if verbose:
+        print()
 
 
 ######################################################################

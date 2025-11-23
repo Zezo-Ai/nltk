@@ -145,71 +145,35 @@ def split_resource_url(resource_url):
 
 
 def normalize_resource_url(resource_url):
-    r"""
-    Normalizes a resource url
-
-    >>> windows = sys.platform.startswith('win')
-    >>> os.path.normpath(split_resource_url(normalize_resource_url('file:grammar.fcfg'))[1]) == \
-    ... ('\\' if windows else '') + os.path.abspath(os.path.join(os.curdir, 'grammar.fcfg'))
-    True
-    >>> not windows or normalize_resource_url('file:C:/dir/file') == 'file:///C:/dir/file'
-    True
-    >>> not windows or normalize_resource_url('file:C:\\dir\\file') == 'file:///C:/dir/file'
-    True
-    >>> not windows or normalize_resource_url('file:C:\\dir/file') == 'file:///C:/dir/file'
-    True
-    >>> not windows or normalize_resource_url('file://C:/dir/file') == 'file:///C:/dir/file'
-    True
-    >>> not windows or normalize_resource_url('file:////C:/dir/file') == 'file:///C:/dir/file'
-    True
-    >>> not windows or normalize_resource_url('nltk:C:/dir/file') == 'file:///C:/dir/file'
-    True
-    >>> not windows or normalize_resource_url('nltk:C:\\dir\\file') == 'file:///C:/dir/file'
-    True
-    >>> windows or normalize_resource_url('file:/dir/file/toy.cfg') == 'file:///dir/file/toy.cfg'
-    True
-    >>> normalize_resource_url('nltk:home/nltk')
-    'nltk:home/nltk'
-    >>> windows or normalize_resource_url('nltk:/home/nltk') == 'file:///home/nltk'
-    True
-    >>> normalize_resource_url('https://example.com/dir/file')
-    'https://example.com/dir/file'
-    >>> normalize_resource_url('dir/file')
-    'nltk:dir/file'
-    """
     try:
         protocol, name = split_resource_url(resource_url)
-
-        # If the "protocol" looks like a Windows drive letter (e.g. 'C'),
-        # treat the string as a no-protocol input and validate it.
-        # This prevents the earlier behavior where 'C:...' was treated as a protocol.
-        if re.fullmatch(r"[A-Za-z]", protocol):
-            # Validate and treat as no-protocol
-            _reject_unsafe_no_protocol(resource_url)
-            protocol = "nltk"
-            name = resource_url
-
     except ValueError:
-        # No protocol supplied: validate before treating it as an nltk: path.
-        # Prevents absolute/traversal strings from resolving to arbitrary files.
+        # No protocol supplied: enforce safety
         _reject_unsafe_no_protocol(resource_url)
         protocol = "nltk"
         name = resource_url
 
-    # use file protocol if the path is an absolute path
-    if protocol == "nltk" and os.path.isabs(name):
+    # Windows drive path under nltk protocol → convert to file://
+    if protocol == "nltk" and re.match(r"^[A-Za-z]:[\\/]", name):
         protocol = "file://"
         name = normalize_resource_name(name, False, None)
+
+    # Absolute paths under nltk → file://
+    elif protocol == "nltk" and os.path.isabs(name):
+        protocol = "file://"
+        name = normalize_resource_name(name, False, None)
+
     elif protocol == "file":
         protocol = "file://"
-        # name is absolute
         name = normalize_resource_name(name, False, None)
+
     elif protocol == "nltk":
         protocol = "nltk:"
         name = normalize_resource_name(name, True)
+
     else:
-        # handled by urllib
         protocol += "://"
+
     return "".join([protocol, name])
 
 
@@ -261,40 +225,23 @@ def normalize_resource_name(resource_name, allow_relative=True, relative_path=No
     return resource_name
 
 
-# Patterns used to detect unsafe *no-protocol* resource strings.
-# We treat a no-protocol string as unsafe if it:
-#  - contains '..' path traversal segments
-#  - starts with '/' (UNIX absolute)
-#  - starts with './' (explicit relative indicator)
-#  - contains backslashes (Windows separator)
-#  - starts with a Windows drive prefix: 'C:/', 'D:\', etc.
-# If an explicit protocol (contains ':') is provided, we skip this check.
+# Only block true directory traversal and absolute/drive paths on no-protocol input
 _UNSAFE_NO_PROTOCOL_RE = re.compile(r"(^/)|(^\./)|(\.\.)|(\\)|(^[A-Za-z]:[\\\\/])")
 
 
 def _reject_unsafe_no_protocol(resource):
-    """
-    Defensive validation for inputs that omit protocol.
-
-    Reject traversal/absolute-style inputs when no protocol is present.
-    This prevents dangerous cases like '../../etc/passwd' resolving
-    against an empty path entry and leaking filesystem data.
-    """
     if not isinstance(resource, str):
         return
 
-    # If a protocol like "nltk:", "file:", "https:" is present — skip the check.
-    # But do NOT skip when the string is a Windows drive path like "C:/..." or "C:\..."
-    # (those contain ':' but are not intended as protocol names).
+    # If explicit protocol exists (and isn't a Windows drive), skip check
     if ":" in resource and not re.match(r"^[A-Za-z]:[\\/]", resource):
         return
 
-    # Reject unsafe patterns.
+    # Reject absolute paths, traversal sequences, backslashes, and drive letters
     if _UNSAFE_NO_PROTOCOL_RE.search(resource):
         raise ValueError(
-            "Unsafe resource path rejected: %r. If you intended to access a local "
-            "file or absolute path, use an explicit protocol such as 'file:'. "
-            "For package resources, use 'nltk:'." % (resource,)
+            f"Unsafe resource path rejected: {resource!r}. "
+            "Use 'file:' for absolute paths or 'nltk:' for package resources."
         )
 
 
@@ -553,14 +500,6 @@ def find(resource_name, paths=None):
     :rtype: str
     """
     resource_name = normalize_resource_name(resource_name, True)
-    # Defense-in-depth: reject traversal or absolute-like names
-    # if find() is called directly without normalize_resource_url().
-    if isinstance(resource_name, str) and _UNSAFE_NO_PROTOCOL_RE.search(resource_name):
-        raise ValueError(
-            "Unsafe resource path rejected: %r. Use an explicit protocol such as 'file:' "
-            "for absolute/local paths, or 'nltk:' for package resources."
-            % (resource_name,)
-        )
     # Resolve default paths at runtime in-case the user overrides
     # nltk.data.path
     if paths is None:

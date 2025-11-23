@@ -2286,7 +2286,9 @@ def unzip(filename, root, verbose=True):
             raise Exception(message.message)
 
 
-def _unzip_iter(filename, root, verbose=True, max_unzipped_bytes=1 * 1024 * 1024 * 1024):
+def _unzip_iter(
+    filename, root, verbose=True, max_unzipped_bytes=1 * 1024 * 1024 * 1024
+):
     """
     Secure replacement for ZipFile.extractall that:
       - defends against path traversal, absolute paths, drive letters
@@ -2354,7 +2356,9 @@ def _unzip_iter(filename, root, verbose=True, max_unzipped_bytes=1 * 1024 * 1024
                     shutil.rmtree(tmpdir)
                 except Exception:
                     pass
-                yield ErrorMessage(filename, f"Unsafe zip entry blocked (absolute path): {name!r}")
+                yield ErrorMessage(
+                    filename, f"Unsafe zip entry blocked (absolute path): {name!r}"
+                )
                 return
             if ":" in norm_name.split("/")[0]:
                 zf.close()
@@ -2362,7 +2366,9 @@ def _unzip_iter(filename, root, verbose=True, max_unzipped_bytes=1 * 1024 * 1024
                     shutil.rmtree(tmpdir)
                 except Exception:
                     pass
-                yield ErrorMessage(filename, f"Unsafe zip entry blocked (drive spec): {name!r}")
+                yield ErrorMessage(
+                    filename, f"Unsafe zip entry blocked (drive spec): {name!r}"
+                )
                 return
 
             # Reject traversal segments
@@ -2373,7 +2379,9 @@ def _unzip_iter(filename, root, verbose=True, max_unzipped_bytes=1 * 1024 * 1024
                     shutil.rmtree(tmpdir)
                 except Exception:
                     pass
-                yield ErrorMessage(filename, f"Unsafe zip entry blocked (path traversal): {name!r}")
+                yield ErrorMessage(
+                    filename, f"Unsafe zip entry blocked (path traversal): {name!r}"
+                )
                 return
 
             # Build the target path under tmpdir
@@ -2399,7 +2407,9 @@ def _unzip_iter(filename, root, verbose=True, max_unzipped_bytes=1 * 1024 * 1024
                     shutil.rmtree(tmpdir)
                 except Exception:
                     pass
-                yield ErrorMessage(filename, f"Unsafe zip entry blocked (symlink): {name!r}")
+                yield ErrorMessage(
+                    filename, f"Unsafe zip entry blocked (symlink): {name!r}"
+                )
                 return
 
             # Extract member safely streaming (don't load whole file into memory)
@@ -2415,7 +2425,9 @@ def _unzip_iter(filename, root, verbose=True, max_unzipped_bytes=1 * 1024 * 1024
                             dst.write(chunk)
                             total_unzipped += len(chunk)
                             if total_unzipped > max_unzipped_bytes:
-                                raise ValueError("Exceeded maximum allowed unzipped bytes")
+                                raise ValueError(
+                                    "Exceeded maximum allowed unzipped bytes"
+                                )
 
                 # try to preserve permission bits if present
                 try:
@@ -2429,7 +2441,9 @@ def _unzip_iter(filename, root, verbose=True, max_unzipped_bytes=1 * 1024 * 1024
 
                 # Emit progress as a ProgressMessage (0-100)
                 if total_uncompressed:
-                    percent = int(min(100, (total_unzipped * 100) // total_uncompressed))
+                    percent = int(
+                        min(100, (total_unzipped * 100) // total_uncompressed)
+                    )
                     yield ProgressMessage(percent)
                 else:
                     # unknown total size: emit small progress nudges
@@ -2457,7 +2471,9 @@ def _unzip_iter(filename, root, verbose=True, max_unzipped_bytes=1 * 1024 * 1024
                         shutil.rmtree(tmpdir)
                     except Exception:
                         pass
-                    yield ErrorMessage(filename, f"Unsafe extraction path detected for {rel!r}")
+                    yield ErrorMessage(
+                        filename, f"Unsafe extraction path detected for {rel!r}"
+                    )
                     return
 
         # Move/merge tmpdir contents into final root atomically-ish
@@ -2469,7 +2485,9 @@ def _unzip_iter(filename, root, verbose=True, max_unzipped_bytes=1 * 1024 * 1024
                 if os.path.isdir(dst_entry) and os.path.isdir(src_entry):
                     for top, _, names in os.walk(src_entry):
                         rel = os.path.relpath(top, src_entry)
-                        target_top = os.path.join(dst_entry, rel) if rel != "." else dst_entry
+                        target_top = (
+                            os.path.join(dst_entry, rel) if rel != "." else dst_entry
+                        )
                         os.makedirs(target_top, exist_ok=True)
                         for name in names:
                             s = os.path.join(top, name)

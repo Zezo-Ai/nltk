@@ -226,17 +226,23 @@ def normalize_resource_name(resource_name, allow_relative=True, relative_path=No
 
 
 # Only block true directory traversal and absolute/drive paths on no-protocol input
-_UNSAFE_NO_PROTOCOL_RE = re.compile(r"(^/)|(^\./)|(\.\.)|(\\)|(^[A-Za-z]:[\\\\/])")
+_UNSAFE_NO_PROTOCOL_RE = re.compile(
+    r"""
+    (^/)            |   # absolute path
+    (\.\.)          |   # traversal
+    (\\)            |   # backslashes (Windows)
+    (^[A-Za-z]:)        # Windows drive letter
+    """,
+    re.VERBOSE,
+)
 
 
 def _reject_unsafe_no_protocol(resource):
     if not isinstance(resource, str):
         return
-
-    # If explicit protocol exists (and isn't a Windows drive), skip check
-    if ":" in resource and not re.match(r"^[A-Za-z]:[\\/]", resource):
+    # If explicit protocol exists (not drive letter)
+    if ":" in resource and not re.match(r"^[A-Za-z]:", resource):
         return
-
     # Reject absolute paths, traversal sequences, backslashes, and drive letters
     if _UNSAFE_NO_PROTOCOL_RE.search(resource):
         raise ValueError(

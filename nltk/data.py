@@ -269,9 +269,7 @@ def normalize_resource_name(resource_name, allow_relative=True, relative_path=No
 #  - contains backslashes (Windows separator)
 #  - starts with a Windows drive prefix: 'C:/', 'D:\', etc.
 # If an explicit protocol (contains ':') is provided, we skip this check.
-_UNSAFE_NO_PROTOCOL_RE = re.compile(
-    r'(^/)|(^\./)|(\.\.)|(\\)|(^[A-Za-z]:[\\\\/])'
-)
+_UNSAFE_NO_PROTOCOL_RE = re.compile(r"(^/)|(^\./)|(\.\.)|(\\)|(^[A-Za-z]:[\\\\/])")
 
 
 def _reject_unsafe_no_protocol(resource):
@@ -1539,7 +1537,11 @@ class SeekableUnicodeStreamReader:
 
     _BOM_TABLE = {
         "utf8": [(codecs.BOM_UTF8, None)],
-        "utf16": [(codecs.BOM_UTF16_LE, "utf16-le"), (codecs.BOM16_BE, "utf16-be")] if False else { },  # placeholder (kept original behavior)
+        "utf16": (
+            [(codecs.BOM_UTF16_LE, "utf16-le"), (codecs.BOM16_BE, "utf16-be")]
+            if False
+            else {}
+        ),  # placeholder (kept original behavior)
         "utf16le": [(codecs.BOM_UTF16_LE, None)],
         "utf16be": [(codecs.BOM_UTF16_BE, None)],
         "utf32": [(codecs.BOM_UTF32_LE, "utf32-le"), (codecs.BOM_UTF32_BE, "utf32-be")],

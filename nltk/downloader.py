@@ -2286,13 +2286,8 @@ def unzip(filename, root, verbose=True):
 
 
 def _unzip_iter(filename, root, verbose=True):
-    """
-    Safely extract the zip file ``filename`` into ``root`` while preventing
-    Zip-Slip (path traversal) attacks. Each extracted path is validated to
-    ensure it stays within ``root``.
-    """
     if verbose:
-        sys.stdout.write(f"Unzipping {os.path.split(filename)[1]}")
+        sys.stdout.write("Unzipping %s" % os.path.split(filename)[1])
         sys.stdout.flush()
 
     try:
@@ -2304,44 +2299,15 @@ def _unzip_iter(filename, root, verbose=True):
         yield ErrorMessage(filename, e)
         return
 
-    for member in zf.infolist():
-        # Original name from zip
-        name = member.filename
-
-        # Normalize path separators
-        norm = os.path.normpath(name)
-
-        # Reject absolute paths
-        if os.path.isabs(norm):
-            yield ErrorMessage(filename, f"Unsafe absolute path in zip: {name}")
+    # --- Zip Slip Protection (Minimal Patch) ---
+    root_abs = os.path.abspath(root)
+    for member in zf.namelist():
+        target = os.path.abspath(os.path.join(root_abs, member))
+        if not target.startswith(root_abs + os.sep):
+            yield ErrorMessage(filename, f"Zip Slip blocked: {member}")
             return
-
-        # Reject parent-directory traversal
-        if norm.startswith("..") or ".." in norm.split(os.sep):
-            yield ErrorMessage(filename, f"Unsafe traversal path in zip: {name}")
-            return
-
-        # Build final path safely
-        dest = os.path.join(root, norm)
-        abs_root = os.path.abspath(root)
-        abs_dest = os.path.abspath(dest)
-
-        # Ensure dest is still inside root, preventing escape
-        if not abs_dest.startswith(abs_root + os.sep) and abs_dest != abs_root:
-            yield ErrorMessage(filename, f"Zip entry escapes target directory: {name}")
-            return
-
-        # Create directories
-        if member.is_dir():
-            os.makedirs(abs_dest, exist_ok=True)
-            continue
-
-        # Ensure parent exists
-        os.makedirs(os.path.dirname(abs_dest), exist_ok=True)
-
-        # Extract file safely
-        with zf.open(member, "r") as src, open(abs_dest, "wb") as dst:
-            shutil.copyfileobj(src, dst)
+        zf.extract(member, root)
+    # -------------------------------------------
 
     if verbose:
         print()

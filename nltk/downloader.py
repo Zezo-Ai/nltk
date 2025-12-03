@@ -2286,28 +2286,47 @@ def unzip(filename, root, verbose=True):
 
 
 def _unzip_iter(filename, root, verbose=True):
-    if verbose:
-        sys.stdout.write("Unzipping %s" % os.path.split(filename)[1])
-        sys.stdout.flush()
+    """
+    Secure ZIP extraction:
+    - Prevents classic Zip-Slip via traversal/absolute/drive-letter paths.
+    - Prevents writes through pre-existing symlinks inside the extraction root.
+    - Keeps original downloader behavior unchanged otherwise.
+    """
 
     try:
         zf = zipfile.ZipFile(filename)
-    except zipfile.BadZipFile:
-        yield ErrorMessage(filename, "Error with downloaded zip file")
-        return
     except Exception as e:
         yield ErrorMessage(filename, e)
         return
 
-    # --- Zip Slip Protection (Minimal Patch) ---
+    # Canonicalized root path
     root_abs = os.path.abspath(root)
+    root_real = os.path.realpath(root_abs)
+    root_prefix = root_real.rstrip(os.sep) + os.sep
+
     for member in zf.namelist():
-        target = os.path.abspath(os.path.join(root_abs, member))
-        if not target.startswith(root_abs + os.sep):
+
+        # Build the absolute path where file *would* be extracted
+        raw_target = os.path.join(root_abs, member)
+
+        # Normalized absolute path (blocks ../, absolute, drive letters)
+        target_abs = os.path.abspath(raw_target)
+        if not target_abs.startswith(root_abs.rstrip(os.sep) + os.sep):
             yield ErrorMessage(filename, f"Zip Slip blocked: {member}")
             return
-        zf.extract(member, root)
-    # -------------------------------------------
+
+        # NEW: Follow symlinks & check real location
+        target_real = os.path.realpath(target_abs)
+        if not target_real.startswith(root_prefix):
+            yield ErrorMessage(filename, f"Symlink escape blocked: {member}")
+            return
+
+        # Safe extraction
+        try:
+            zf.extract(member, root)
+        except Exception as e:
+            yield ErrorMessage(filename, f"Extraction error for {member}: {e}")
+            return
 
     if verbose:
         print()

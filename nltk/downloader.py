@@ -2299,15 +2299,7 @@ def _unzip_iter(filename, root, verbose=True):
         yield ErrorMessage(filename, e)
         return
 
-    # --- Zip Slip Protection (Minimal Patch) ---
-    root_abs = os.path.abspath(root)
-    for member in zf.namelist():
-        target = os.path.abspath(os.path.join(root_abs, member))
-        if not target.startswith(root_abs + os.sep):
-            yield ErrorMessage(filename, f"Zip Slip blocked: {member}")
-            return
-        zf.extract(member, root)
-    # -------------------------------------------
+    zf.extractall(root)
 
     if verbose:
         print()

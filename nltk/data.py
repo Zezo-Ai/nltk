@@ -145,6 +145,38 @@ def split_resource_url(resource_url):
 
 
 def normalize_resource_url(resource_url):
+    r"""
+    Normalizes a resource url
+
+    >>> windows = sys.platform.startswith('win')
+    >>> os.path.normpath(split_resource_url(normalize_resource_url('file:grammar.fcfg'))[1]) == \
+    ... ('\\' if windows else '') + os.path.abspath(os.path.join(os.curdir, 'grammar.fcfg'))
+    True
+    >>> not windows or normalize_resource_url('file:C:/dir/file') == 'file:///C:/dir/file'
+    True
+    >>> not windows or normalize_resource_url('file:C:\\dir\\file') == 'file:///C:/dir/file'
+    True
+    >>> not windows or normalize_resource_url('file:C:\\dir/file') == 'file:///C:/dir/file'
+    True
+    >>> not windows or normalize_resource_url('file://C:/dir/file') == 'file:///C:/dir/file'
+    True
+    >>> not windows or normalize_resource_url('file:////C:/dir/file') == 'file:///C:/dir/file'
+    True
+    >>> not windows or normalize_resource_url('nltk:C:/dir/file') == 'file:///C:/dir/file'
+    True
+    >>> not windows or normalize_resource_url('nltk:C:\\dir\\file') == 'file:///C:/dir/file'
+    True
+    >>> windows or normalize_resource_url('file:/dir/file/toy.cfg') == 'file:///dir/file/toy.cfg'
+    True
+    >>> normalize_resource_url('nltk:home/nltk')
+    'nltk:home/nltk'
+    >>> windows or normalize_resource_url('nltk:/home/nltk') == 'file:///home/nltk'
+    True
+    >>> normalize_resource_url('https://example.com/dir/file')
+    'https://example.com/dir/file'
+    >>> normalize_resource_url('dir/file')
+    'nltk:dir/file'
+    """
     try:
         protocol, name = split_resource_url(resource_url)
     except ValueError:

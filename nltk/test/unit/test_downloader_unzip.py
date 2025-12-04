@@ -160,26 +160,15 @@ class TestSecureUnzip:
                 except OSError:
                     pass
 
-    @pytest.mark.xfail(
-        reason=(
-            "Current implementation does not prevent writes via pre-existing "
-            "symlinks inside the extraction root. Hardening NLTK's downloader "
-            "against this more advanced escape vector is desirable but not yet "
-            "implemented."
-        )
-    )
     def test_entries_resolved_outside_root_are_blocked_via_symlink(
         self, tmp_path: Path
     ) -> None:
         """
-        DESIRED (but currently not enforced) behaviour:
-
         If there is a pre-existing symlink below the extraction root that
         points outside the root, writing through that symlink should not
         be allowed to escape the root.
 
-        This test documents the desired hardening behaviour and is marked
-        as xfail until _unzip_iter is tightened to defend against this
+        This test documents the desired hardening to defend against this
         class of attacks.
         """
         if not hasattr(os, "symlink"):
@@ -203,7 +192,7 @@ class TestSecureUnzip:
 
         _run_unzip_iter(zip_path, extract_root, verbose=False)
 
-        # Desired property (not currently met by the implementation):
+        # Desired property:
         assert not outside_target.exists()
         assert (extract_root / "pkg" / "good.txt").read_bytes() == b"ok"
 

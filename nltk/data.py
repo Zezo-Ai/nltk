@@ -1514,11 +1514,7 @@ class SeekableUnicodeStreamReader:
 
     _BOM_TABLE = {
         "utf8": [(codecs.BOM_UTF8, None)],
-        "utf16": (
-            [(codecs.BOM_UTF16_LE, "utf16-le"), (codecs.BOM16_BE, "utf16-be")]
-            if False
-            else {}
-        ),  # placeholder (kept original behavior)
+        "utf16": [(codecs.BOM_UTF16_LE, "utf16-le"), (codecs.BOM_UTF16_BE, "utf16-be")],
         "utf16le": [(codecs.BOM_UTF16_LE, None)],
         "utf16be": [(codecs.BOM_UTF16_BE, None)],
         "utf32": [(codecs.BOM_UTF32_LE, "utf32-le"), (codecs.BOM_UTF32_BE, "utf32-be")],

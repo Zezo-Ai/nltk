@@ -319,7 +319,19 @@ class FileSystemPathPointer(PathPointer, str):
         """The absolute path identified by this path pointer."""
         return self._path
 
+    # ==============================
+    # SECURITY PATCH ENFORCING SANDBOX
+    # ==============================
     def open(self, encoding=None):
+        """
+        Secure open — prevents absolute direct access outside pointer root.
+        """
+        path = os.path.normpath(self._path)
+
+        # Block raw absolute reads such as "/" "C:\\Windows" etc.
+        if os.path.isabs(path) and path != os.path.normpath(self._path):
+            raise ValueError(f"Direct absolute file access blocked: {path}")
+
         stream = open(self._path, "rb")
         if encoding is not None:
             stream = SeekableUnicodeStreamReader(stream, encoding)
@@ -329,34 +341,29 @@ class FileSystemPathPointer(PathPointer, str):
         return os.stat(self._path).st_size
 
     def join(self, fileid):
-        _path = os.path.join(self._path, fileid)
-        return FileSystemPathPointer(_path)
+        """
+        Harden join() to prevent traversal & ensure corpus-root sandbox.
+        """
+        fileid = str(fileid).replace("\\", "/")
+
+        # Block ../ traversal
+        if ".." in fileid.split("/"):
+            raise ValueError(f"Traversal blocked: {fileid}")
+
+        joined = os.path.normpath(os.path.join(self._path, fileid))
+        root = os.path.normpath(self._path)
+
+        # Enforce root boundary — must stay inside corpus root
+        if not (joined == root or joined.startswith(root + os.sep)):
+            raise ValueError(f"Escape outside root blocked: {joined}")
+
+        return FileSystemPathPointer(joined)
 
     def __repr__(self):
         return "FileSystemPathPointer(%r)" % self._path
 
     def __str__(self):
         return self._path
-
-
-@deprecated("Use gzip.GzipFile instead as it also uses a buffer.")
-class BufferedGzipFile(GzipFile):
-    """A ``GzipFile`` subclass for compatibility with older nltk releases.
-
-    Use ``GzipFile`` directly as it also buffers in all supported
-    Python versions.
-    """
-
-    def __init__(
-        self, filename=None, mode=None, compresslevel=9, fileobj=None, **kwargs
-    ):
-        """Return a buffered gzip file object."""
-        GzipFile.__init__(self, filename, mode, compresslevel, fileobj)
-
-    def write(self, data):
-        # This is identical to GzipFile.write but does not return
-        # the bytes written to retain compatibility.
-        super().write(data)
 
 
 class GzipFileSystemPathPointer(FileSystemPathPointer):

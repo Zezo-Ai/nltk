@@ -366,6 +366,26 @@ class FileSystemPathPointer(PathPointer, str):
         return self._path
 
 
+@deprecated("Use gzip.GzipFile instead as it also uses a buffer.")
+class BufferedGzipFile(GzipFile):
+    """A ``GzipFile`` subclass for compatibility with older nltk releases.
+
+    Use ``GzipFile`` directly as it also buffers in all supported
+    Python versions.
+    """
+
+    def __init__(
+        self, filename=None, mode=None, compresslevel=9, fileobj=None, **kwargs
+    ):
+        """Return a buffered gzip file object."""
+        GzipFile.__init__(self, filename, mode, compresslevel, fileobj)
+
+    def write(self, data):
+        # This is identical to GzipFile.write but does not return
+        # the bytes written to retain compatibility.
+        super().write(data)
+
+
 class GzipFileSystemPathPointer(FileSystemPathPointer):
     """
     A subclass of ``FileSystemPathPointer`` that identifies a gzip-compressed

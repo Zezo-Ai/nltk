@@ -216,12 +216,40 @@ def re_show(regexp, string, left="{", right="}"):
 
 
 # recipe from David Mertz
-def filestring(f):
+def filestring(f, allowed_dir=None):
+    """
+    Secure version:
+    - Prevents arbitrary file read on system
+    - Requires allowed_dir to sandbox file access
+    - Blocks ../ traversal & symlink escape
+    - Maintains original behavior only inside allowed_dir
+    """
+
+    # file-like object -> safe read
     if hasattr(f, "read"):
         return f.read()
+
+    # path -> restricted read
     elif isinstance(f, str):
-        with open(f) as infile:
+        import os
+
+        if allowed_dir is None:
+            raise PermissionError(
+                "Unsafe call to filestring(): 'allowed_dir' required to prevent arbitrary file access"
+            )
+
+        # normalize & resolve real locations
+        full = os.path.realpath(os.path.abspath(f))
+        base = os.path.realpath(os.path.abspath(allowed_dir))
+
+        # prevent reading outside allowed directory
+        if not full.startswith(base + os.sep):
+            raise PermissionError(f"Access blocked outside allowed directory: {full}")
+
+        with open(full, encoding="utf-8", errors="ignore") as infile:
             return infile.read()
+
+    # invalid input
     else:
         raise ValueError("Must be called with a filename or file-like object")
 

@@ -218,40 +218,60 @@ def re_show(regexp, string, left="{", right="}"):
 # recipe from David Mertz
 def filestring(f, allowed_dir=None):
     """
-    Secure version:
-    - Prevents arbitrary file read on system
-    - Requires allowed_dir to sandbox file access
-    - Blocks ../ traversal & symlink escape
-    - Maintains original behavior only inside allowed_dir
+    Read a file path or file-like object into a string.
+
+    Security (opt-in):
+    - If `allowed_dir` is provided, enforce sandbox restrictions:
+        * Resolve realpath()
+        * Prevent ../ traversal
+        * Prevent symlink escape
+    - If `allowed_dir` is None, old behavior is preserved (for backward compatibility).
+
+    Notes:
+    - File-like objects (`.read()`) are always allowed.
+    - TOCTOU race conditions cannot be fully eliminated if an attacker can modify
+      the filesystem concurrently, though realpath() and commonpath() reduce common bypasses.
     """
 
-    # file-like object -> safe read
+    # file-like object: preserve legacy behavior
     if hasattr(f, "read"):
         return f.read()
 
-    # path -> restricted read
-    elif isinstance(f, str):
-        import os
+    # path input
+    if isinstance(f, str):
+        # sandbox mode enabled only when allowed_dir provided
+        if allowed_dir is not None:
+            base = os.path.realpath(os.path.abspath(allowed_dir))
 
-        if allowed_dir is None:
-            raise PermissionError(
-                "Unsafe call to filestring(): 'allowed_dir' required to prevent arbitrary file access"
-            )
+            # ensure allowed_dir exists and is a directory
+            if not os.path.isdir(base):
+                raise ValueError(
+                    f"allowed_dir must be an existing directory: {allowed_dir!r}"
+                )
 
-        # normalize & resolve real locations
-        full = os.path.realpath(os.path.abspath(f))
-        base = os.path.realpath(os.path.abspath(allowed_dir))
+            full = os.path.realpath(os.path.abspath(f))
 
-        # prevent reading outside allowed directory
-        if not full.startswith(base + os.sep):
-            raise PermissionError(f"Access blocked outside allowed directory: {full}")
+            # robust "is inside" check using commonpath; handle cross-drive case
+            try:
+                inside = os.path.commonpath([base, full]) == base
+            except ValueError:
+                # different drives (Windows) -> not inside
+                inside = False
 
-        with open(full, encoding="utf-8", errors="ignore") as infile:
+            if not inside:
+                raise PermissionError(
+                    f"Access blocked: '{full}' is outside allowed_dir '{base}'"
+                )
+
+            # safe read with UTF-8-first fallback
+            with open(full, encoding="utf-8", errors="ignore") as infile:
+                return infile.read()
+
+        # no sandbox: legacy behavior (backward compatible)
+        with open(f, encoding="utf-8", errors="ignore") as infile:
             return infile.read()
 
-    # invalid input
-    else:
-        raise ValueError("Must be called with a filename or file-like object")
+    raise ValueError("filestring() expects a filename or a file-like object")
 
 
 ##########################################################################

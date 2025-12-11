@@ -46,8 +46,11 @@ from gzip import GzipFile
 from io import BytesIO, TextIOWrapper
 from urllib.request import url2pathname, urlopen
 
-# Reject unsafe no-protocol paths: traversal, abs paths, backslashes, drive letters
-_UNSAFE_NO_PROTOCOL_RE = re.compile(r"""^(?:\.\.|/|\\|[A-Za-z]:[/\\])""")
+# Reject unsafe no-protocol paths: traversal segments, trailing '..', absolute paths,
+# backslashes, Windows drive letters. Use a raw-string pattern and do not anchor only
+# at the start — we'll use search() for safety checks.
+_UNSAFE_NO_PROTOCOL_RE = re.compile(r"(?:\.\./|\.\.$|^/|\\|^[A-Za-z]:[/\\])")
+
 
 try:
     from zlib import Z_SYNC_FLUSH as FLUSH
@@ -186,8 +189,8 @@ def normalize_resource_url(resource_url):
         protocol, name = split_resource_url(resource_url)
 
         # Validate unsafe no-protocol paths (applies to nltk:)
-        if protocol == "nltk" and _UNSAFE_NO_PROTOCOL_RE.match(name):
-            raise LookupError(f"Unsafe resource path: {name!r}")
+        if protocol == "nltk" and _UNSAFE_NO_PROTOCOL_RE.search(name):
+            raise ValueError(f"Unsafe resource path: {name!r}")
 
     except ValueError:
         # No protocol → default to nltk:
@@ -195,8 +198,8 @@ def normalize_resource_url(resource_url):
         name = resource_url
 
         # Validate raw no-protocol input
-        if _UNSAFE_NO_PROTOCOL_RE.match(name):
-            raise LookupError(f"Unsafe resource path: {name!r}")
+        if _UNSAFE_NO_PROTOCOL_RE.search(name):
+            raise ValueError(f"Unsafe resource path: {name!r}")
 
     # ----------------------------------------------------------------------
     # Protocol-specific handling
@@ -204,9 +207,9 @@ def normalize_resource_url(resource_url):
 
     # Case 1: nltk:<path>
     if protocol == "nltk":
-        # Illegal: windows drive letters or absolute paths under nltk:
-        if _UNSAFE_NO_PROTOCOL_RE.match(name):
-            raise LookupError(f"Unsafe resource path: {name!r}")
+        # Validate raw no-protocol input
+        if _UNSAFE_NO_PROTOCOL_RE.search(name):
+            raise ValueError(f"Unsafe resource path: {name!r}")
 
         protocol = "nltk:"
         name = normalize_resource_name(name, True)
@@ -527,8 +530,9 @@ def find(resource_name, paths=None):
     """
     resource_name = normalize_resource_name(resource_name, True)
     # Defense-in-depth: reject traversal/absolute paths even if caller bypassed normalize_resource_url()
-    if _UNSAFE_NO_PROTOCOL_RE.match(resource_name):
-        raise LookupError(f"Unsafe resource path: {resource_name!r}")
+    # Use search() so traversal components anywhere in the resource_name trigger rejection.
+    if _UNSAFE_NO_PROTOCOL_RE.search(resource_name):
+        raise ValueError(f"Unsafe resource path: {resource_name!r}")
 
     # Resolve default paths at runtime in-case the user overrides
     # nltk.data.path

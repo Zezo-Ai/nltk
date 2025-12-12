@@ -29,9 +29,6 @@ jobs:
       - name: Install pre-commit
         run: pip install pre-commit
 
-      - name: Clear pre-commit cache
-        run: pre-commit clean
-
       - name: Run pre-commit hooks
         run: pre-commit run --all-files
 

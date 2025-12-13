@@ -187,19 +187,10 @@ def normalize_resource_url(resource_url):
     """
     try:
         protocol, name = split_resource_url(resource_url)
-
-        # Validate unsafe no-protocol paths (applies to nltk:)
-        if protocol == "nltk" and _UNSAFE_NO_PROTOCOL_RE.search(name):
-            raise ValueError(f"Unsafe resource path: {name!r}")
-
     except ValueError:
-        # No protocol → default to nltk:
+        # No protocol → default to 'nltk:'
         protocol = "nltk"
         name = resource_url
-
-        # Validate raw no-protocol input
-        if _UNSAFE_NO_PROTOCOL_RE.search(name):
-            raise ValueError(f"Unsafe resource path: {name!r}")
 
     # ----------------------------------------------------------------------
     # Protocol-specific handling
@@ -207,19 +198,20 @@ def normalize_resource_url(resource_url):
 
     # Case 1: nltk:<path>
     if protocol == "nltk":
-        # Validate raw no-protocol input
-        if _UNSAFE_NO_PROTOCOL_RE.search(name):
-            raise ValueError(f"Unsafe resource path: {name!r}")
-
-        protocol = "nltk:"
-        name = normalize_resource_name(name, True)
+        # If "nltk:" is used with an absolute path, treat it as "file://"
+        if os.path.isabs(name):
+            protocol = "file://"
+            name = normalize_resource_name(name, False, None)
+        else:
+            protocol = "nltk:"
+            name = normalize_resource_name(name, True)
 
     # Case 2: file:<path>
     elif protocol == "file":
         protocol = "file://"
         name = normalize_resource_name(name, False, None)
 
-    # Case 3: external URLs (http, https, ftp, etc.)
+    # Case 3: External URLs (http, https, ftp, etc.)
     else:
         protocol += "://"
 

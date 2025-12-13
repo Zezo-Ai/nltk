@@ -189,6 +189,8 @@ def normalize_resource_url(resource_url):
         protocol, name = split_resource_url(resource_url)
     except ValueError:
         # No protocol → default to 'nltk:'
+        if _UNSAFE_NO_PROTOCOL_RE.search(resource_url):
+            raise ValueError(f"Unsafe resource path: {resource_url!r}")
         protocol = "nltk"
         name = resource_url
 

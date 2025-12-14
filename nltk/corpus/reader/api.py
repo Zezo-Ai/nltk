@@ -225,29 +225,29 @@ class CorpusReader:
         Security patched: prevents path traversal & absolute path access.
         """
         # -------- SECURITY PATCH START --------
-        import os
+        file = str(file)
 
-        file = str(file).replace("\\", "/")  # normalize slashes
-
-        # Block absolute path usage (/etc/passwd, C:/..., //server/share)
+        # Block absolute path usage (/etc/passwd, C:\..., \\server\share)
         if os.path.isabs(file):
             raise ValueError("Absolute paths are not allowed")
 
-        # Prevent '../' directory traversal
-        if ".." in file.split("/"):
-            raise ValueError("Path traversal attempt blocked")
-
         # Ensure final resolved path stays inside corpus root
         joined = self._root.join(file)
-        if not os.path.normpath(joined._path).startswith(
-            os.path.normpath(self._root._path)
+
+        root_path = os.path.normpath(self._root._path)
+        target_path = os.path.normpath(joined._path)
+
+        if not (
+            target_path == root_path
+            or target_path.startswith(root_path + os.sep)
         ):
-            raise ValueError("Access outside corpus root blocked")
+            raise ValueError("Path traversal attempt blocked")
         # -------- SECURITY PATCH END --------
 
         encoding = self.encoding(file)
         stream = joined.open(encoding)
         return stream
+
 
     def encoding(self, file):
         """

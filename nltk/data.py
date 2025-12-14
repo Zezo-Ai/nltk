@@ -485,6 +485,36 @@ _resource_cache = {}
    need to be loaded more than once."""
 
 
+def open_datafile(path, file_name="", encoding="utf-8"):
+    """
+    Open a data file using a PathPointer, supporting both filesystem and zip file paths.
+
+    The function can be used in two ways:
+
+    1. `path` is a PathPointer to a directory, and `file_name` is the name of a file
+       within that directory.
+    2. `path` is a PathPointer to a file, and `file_name` is left empty.
+
+    :param path: A PathPointer (e.g. FileSystemPathPointer or ZipFilePathPointer)
+        representing either the file to open (when file_name is empty), or the
+        directory containing the file.
+    :type path: PathPointer
+    :param file_name: The name of the file to open within the directory. Leave empty
+        if `path` already points to the file.
+    :type file_name: str
+    :param encoding: The character encoding to use when opening the file. If None,
+        a binary stream is returned.
+    :type encoding: str or None
+    :return: A file-like object (binary stream if encoding is None, otherwise a text
+        stream with the specified encoding).
+    :rtype: file-like
+    """
+    if file_name:
+        # Use .join() to reach the file regardless of zip/real FS.
+        path = path.join(file_name)
+    return path.open(encoding=encoding)
+
+
 def find(resource_name, paths=None):
     """
     Find the given resource by searching through the directories and

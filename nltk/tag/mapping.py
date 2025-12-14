@@ -34,7 +34,7 @@ from os.path import join
 
 from nltk.data import load
 
-_UNIVERSAL_DATA = "taggers/universal_tagset"
+_UNIVERSAL_DATA = "taggers/universal_tagset/"
 _UNIVERSAL_TAGS = (
     "VERB",
     "NOUN",

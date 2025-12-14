@@ -237,17 +237,13 @@ class CorpusReader:
         root_path = os.path.normpath(self._root._path)
         target_path = os.path.normpath(joined._path)
 
-        if not (
-            target_path == root_path
-            or target_path.startswith(root_path + os.sep)
-        ):
+        if not (target_path == root_path or target_path.startswith(root_path + os.sep)):
             raise ValueError("Path traversal attempt blocked")
         # -------- SECURITY PATCH END --------
 
         encoding = self.encoding(file)
         stream = joined.open(encoding)
         return stream
-
 
     def encoding(self, file):
         """

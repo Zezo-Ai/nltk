@@ -2318,20 +2318,20 @@ def _unzip_iter(filename, root, verbose=True):
         # Zip-Slip check (absolute/traversal/drive-letter cases)
         if not target_abs.startswith(root_prefix):
             yield ErrorMessage(filename, f"Zip Slip blocked: {member}")
-            return
+            continue
 
         # Symlink-escape check
         target_real = os.path.realpath(target_abs)
         if not target_real.startswith(root_prefix):
             yield ErrorMessage(filename, f"Symlink escape blocked: {member}")
-            return
+            continue
 
         # Safe extraction
         try:
             zf.extract(member, root)
         except Exception as e:
             yield ErrorMessage(filename, f"Extraction error for {member}: {e}")
-            return
+            continue
 
     if verbose:
         print()

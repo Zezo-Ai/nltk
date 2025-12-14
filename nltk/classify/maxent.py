@@ -1564,20 +1564,21 @@ class TadmMaxentClassifier(MaxentClassifier):
 def load_maxent_params(tab_dir):
     import numpy
 
+    from nltk.data import open_datafile
     from nltk.tabdata import MaxentDecoder
 
     mdec = MaxentDecoder()
-
-    with open(f"{tab_dir}/weights.txt") as f:
+    # Use .join() to reach the files regardless of zip/real FS.
+    with open_datafile(tab_dir, "weights.txt") as f:
         wgt = numpy.array(list(map(numpy.float64, mdec.txt2list(f))))
 
-    with open(f"{tab_dir}/mapping.tab") as f:
+    with open_datafile(tab_dir, "mapping.tab") as f:
         mpg = mdec.tupkey2dict(f)
 
-    with open(f"{tab_dir}/labels.txt") as f:
+    with open_datafile(tab_dir, "labels.txt") as f:
         lab = mdec.txt2list(f)
 
-    with open(f"{tab_dir}/alwayson.tab") as f:
+    with open_datafile(tab_dir, "alwayson.tab") as f:
         aon = mdec.tab2ivdict(f)
 
     return wgt, mpg, lab, aon
@@ -1610,7 +1611,7 @@ def maxent_pos_tagger():
     from nltk.data import find
     from nltk.tag.sequential import ClassifierBasedPOSTagger
 
-    tab_dir = find("taggers/maxent_treebank_pos_tagger_tab/english")
+    tab_dir = find("taggers/maxent_treebank_pos_tagger_tab/english/")
     wgt, mpg, lab, aon = load_maxent_params(tab_dir)
     mc = MaxentClassifier(
         BinaryMaxentFeatureEncoding(lab, mpg, alwayson_features=aon), wgt

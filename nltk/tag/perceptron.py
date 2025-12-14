@@ -16,7 +16,7 @@ from os.path import join as path_join
 from tempfile import gettempdir
 
 from nltk import jsontags
-from nltk.data import find, load
+from nltk.data import find, open_datafile
 from nltk.tag.api import TaggerI
 
 try:
@@ -136,7 +136,8 @@ class PerceptronTagger(TaggerI):
 
     Load the saved model:
 
-    >>> tagger2 = PerceptronTagger(loc=tagger.save_dir)
+    >>> from nltk.data import find
+    >>> tagger2 = PerceptronTagger(loc=find(tagger.save_dir))
     >>> print(sorted(list(tagger2.classes)))
     ['JJ', 'NN', 'NNS', 'PRP', 'VBZ']
 
@@ -273,11 +274,12 @@ class PerceptronTagger(TaggerI):
 
     def load_from_json(self, lang="eng", loc=None):
         # Automatically find path to the tagger if location is not specified.
+        # loc can refer to zip or real FS
         if not loc:
-            loc = find(f"taggers/averaged_perceptron_tagger_{lang}")
+            loc = find(f"taggers/averaged_perceptron_tagger_{lang}/")
 
         def load_param(json_file):
-            with open(path_join(loc, json_file)) as fin:
+            with open_datafile(loc, json_file) as fin:
                 return json.load(fin)
 
         self.decode_json_params(

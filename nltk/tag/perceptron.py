@@ -13,10 +13,11 @@ import logging
 import random
 from collections import defaultdict
 from os.path import join as path_join
+from pathlib import Path
 from tempfile import gettempdir
 
 from nltk import jsontags
-from nltk.data import find, open_datafile
+from nltk.data import FileSystemPathPointer, find, open_datafile
 from nltk.tag.api import TaggerI
 
 try:
@@ -136,8 +137,8 @@ class PerceptronTagger(TaggerI):
 
     Load the saved model:
 
-    >>> from nltk.data import find
-    >>> tagger2 = PerceptronTagger(loc=find(tagger.save_dir))
+    >>> from nltk.data import FileSystemPathPointer
+    >>> tagger2 = PerceptronTagger(loc=FileSystemPathPointer(tagger.save_dir))
     >>> print(sorted(list(tagger2.classes)))
     ['JJ', 'NN', 'NNS', 'PRP', 'VBZ']
 
@@ -275,8 +276,10 @@ class PerceptronTagger(TaggerI):
     def load_from_json(self, lang="eng", loc=None):
         # Automatically find path to the tagger if location is not specified.
         # loc can refer to zip or real FS
-        if not loc:
+        if loc is None:
             loc = find(f"taggers/averaged_perceptron_tagger_{lang}/")
+        elif isinstance(loc, (str, Path)):
+            loc = FileSystemPathPointer(str(loc))
 
         def load_param(json_file):
             with open_datafile(loc, json_file) as fin:

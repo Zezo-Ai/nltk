@@ -1,3 +1,5 @@
+# Test pickle_load warnings
+
 import pickle
 from pathlib import Path
 

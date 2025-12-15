@@ -191,11 +191,13 @@ class TestSecureUnzip:
         # Pre-existing symlink inside extract_root pointing *outside* it.
         os.symlink(outside_dir, extract_root / "dir_link")
 
-        _run_unzip_iter(zip_path, extract_root, verbose=False)
+        messages = _run_unzip_iter(zip_path, extract_root, verbose=False)
 
         # Desired property:
         assert not outside_target.exists()
         assert (extract_root / "pkg" / "good.txt").read_bytes() == b"ok"
+        # Should yield an ErrorMessage for the blocked symlink escape
+        assert any(isinstance(m, ErrorMessage) for m in messages)
 
     def test_bad_zipfile_yields_errormessage(self, tmp_path: Path) -> None:
         """

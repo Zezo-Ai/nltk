@@ -276,11 +276,10 @@ class PerceptronTagger(TaggerI):
     def load_from_json(self, lang="eng", loc=None):
         # Automatically find path to the tagger if location is not specified.
         # loc can refer to zip or real FS
-        if loc is None or isinstance(loc, str):
-            loc = find(f"taggers/averaged_perceptron_tagger_{lang}/") if loc is None else find(loc)
-        elif isinstance(loc, Path):
+        if loc is None:
+            loc = find(f"taggers/averaged_perceptron_tagger_{lang}/")
+        elif isinstance(loc, (str, Path)):
             loc = FileSystemPathPointer(str(loc))
-        # else: assume loc is already a PathPointer or similar
 
         def load_param(json_file):
             with open_datafile(loc, json_file) as fin:

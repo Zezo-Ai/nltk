@@ -55,7 +55,7 @@ markets    NNS      6       PC
     assert len(result) == 1
 
 
-def test_chartparser_app_uses_pickle_load_not_pickle_load():
+def test_chartparser_app_uses_pickle_load_not_pickle_load_standard():
     # Headless CI can't instantiate Tk-based UI classes, so do a static check:
     # - no calls to pickle.load(...)
     # - references pickle_load(...)

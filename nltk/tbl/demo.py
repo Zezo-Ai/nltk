@@ -328,7 +328,7 @@ def postag(
         with open(serialize_output, "rb") as print_rules:
             brill_tagger_reloaded = pickle_load(print_rules)
         print(f"Reloaded pickled tagger from {serialize_output}")
-        taggedtest_reloaded = brill_tagger.tag_sents(testing_data)
+        taggedtest_reloaded = brill_tagger_reloaded.tag_sents(testing_data)
         if taggedtest == taggedtest_reloaded:
             print("Reloaded tagger tried on test set, results identical")
         else:

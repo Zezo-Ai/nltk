@@ -553,7 +553,8 @@ class TransitionParser(ParserI):
         """
         result = []
         # First load the model
-        model = pickle_load(open(modelFile, "rb"))
+        with open(modelFile, "rb") as f:
+            model = pickle_load(f)
         operation = Transition(self._algorithm)
 
         for depgraph in depgraphs:

@@ -53,7 +53,7 @@ class WarningUnpickler(pickle.Unpickler):
                 if self._context is None
                 else f"{PICKLE_WARNING} ({self._context})"
             )
-            warnings.warn(msg, RuntimeWarning, stacklevel=2)
+            warnings.warn(msg, RuntimeWarning, stacklevel=3)
             self._warned = True
         return super().load()
 

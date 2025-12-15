@@ -21,7 +21,7 @@ except ImportError:
     pass
 
 from nltk.parse import DependencyEvaluator, DependencyGraph, ParserI
-from nltk.picklesec import load_with_warning
+from nltk.picklesec import pickle_load
 
 
 class Configuration:
@@ -553,7 +553,7 @@ class TransitionParser(ParserI):
         """
         result = []
         # First load the model
-        model = load_with_warning(open(modelFile, "rb"))
+        model = pickle_load(open(modelFile, "rb"))
         operation = Transition(self._algorithm)
 
         for depgraph in depgraphs:

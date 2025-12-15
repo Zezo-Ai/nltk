@@ -77,7 +77,7 @@ from nltk.parse.chart import (
     TopDownPredictRule,
     TreeEdge,
 )
-from nltk.picklesec import load_with_warning
+from nltk.picklesec import pickle_load
 from nltk.tree import Tree
 from nltk.util import in_idle
 
@@ -813,7 +813,7 @@ class ChartComparer:
 
     def load_chart(self, filename):
         with open(filename, "rb") as infile:
-            chart = load_with_warning(infile)
+            chart = pickle_load(infile)
         name = os.path.basename(filename)
         if name.endswith(".pickle"):
             name = name[:-7]
@@ -2270,7 +2270,7 @@ class ChartParserApp:
             return
         try:
             with open(filename, "rb") as infile:
-                chart = load_with_warning(infile)
+                chart = pickle_load(infile)
             self._chart = chart
             self._cv.update(chart)
             if self._matrix:
@@ -2308,7 +2308,7 @@ class ChartParserApp:
         try:
             if filename.endswith(".pickle"):
                 with open(filename, "rb") as infile:
-                    grammar = load_with_warning(infile)
+                    grammar = pickle_load(infile)
             else:
                 with open(filename) as infile:
                     grammar = CFG.fromstring(infile.read())

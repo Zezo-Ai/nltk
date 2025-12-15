@@ -589,7 +589,6 @@ def find(resource_name, paths=None):
         zipfile, zipentry = m.groups()
     else:
         zipfile = None
-        zipentry = None
 
     # Check each item in our path
     for path_ in paths:

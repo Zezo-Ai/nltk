@@ -13,6 +13,7 @@ import random
 import time
 
 from nltk.corpus import treebank
+from nltk.picklesec import load_with_warning
 from nltk.tag import BrillTaggerTrainer, RegexpTagger, UnigramTagger
 from nltk.tag.brill import Pos, Word
 from nltk.tbl import Template, error_list
@@ -253,7 +254,7 @@ def postag(
                 )
             )
         with open(cache_baseline_tagger) as print_rules:
-            baseline_tagger = pickle.load(print_rules)
+            baseline_tagger = load_with_warning(print_rules)
             print(f"Reloaded pickled tagger from {cache_baseline_tagger}")
     else:
         baseline_tagger = UnigramTagger(baseline_data, backoff=baseline_backoff_tagger)
@@ -325,7 +326,7 @@ def postag(
             pickle.dump(brill_tagger, print_rules)
         print(f"Wrote pickled tagger to {serialize_output}")
         with open(serialize_output) as print_rules:
-            brill_tagger_reloaded = pickle.load(print_rules)
+            brill_tagger_reloaded = load_with_warning(print_rules)
         print(f"Reloaded pickled tagger from {serialize_output}")
         taggedtest_reloaded = brill_tagger.tag_sents(testing_data)
         if taggedtest == taggedtest_reloaded:

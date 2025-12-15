@@ -64,6 +64,7 @@ from urllib.parse import unquote_plus
 
 from nltk.corpus import wordnet as wn
 from nltk.corpus.reader.wordnet import Lemma, Synset
+from nltk.picklesec import RestrictedUnpickler
 
 firstClient = True
 
@@ -652,16 +653,6 @@ def _synset_relations(word, synset, synset_relations):
     )
 
     return html
-
-
-class RestrictedUnpickler(pickle.Unpickler):
-    """
-    Unpickler that prevents any class or function from being used during loading.
-    """
-
-    def find_class(self, module, name):
-        # Forbid every function
-        raise pickle.UnpicklingError(f"global '{module}.{name}' is forbidden")
 
 
 class Reference:

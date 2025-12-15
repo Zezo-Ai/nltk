@@ -100,7 +100,7 @@ class TestSecureUnzip:
         # Check that the message text indicates it was blocked. Adjust to the
         # exact wording if needed.
         combined_messages = " ".join(str(m.message) for m in err_msgs)
-        assert "Zip Slip" in combined_messages or "blocked" in combined_messages
+        assert "Zip Slip" in combined_messages and "blocked" in combined_messages
 
         # The escaping path must not have been written.
         assert not outside_target.exists()
@@ -144,7 +144,7 @@ class TestSecureUnzip:
             ), "Expected an ErrorMessage for absolute-path Zip-Slip attempt"
 
             combined_messages = " ".join(str(m.message) for m in err_msgs)
-            assert "Zip Slip" in combined_messages or "blocked" in combined_messages
+            assert "Zip Slip" in combined_messages and "blocked" in combined_messages
 
             # Absolute path must not be created by the secure implementation.
             assert not absolute_target.exists()

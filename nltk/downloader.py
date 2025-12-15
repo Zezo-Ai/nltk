@@ -2309,6 +2309,8 @@ def _unzip_iter(filename, root, verbose=True):
     root_real = os.path.realpath(root_abs)
     root_prefix = root_real.rstrip(os.sep) + os.sep
 
+    # Ensure the extraction root directory exists
+    os.makedirs(root, exist_ok=True)
     for member in zf.namelist():
 
         # Construct target path

@@ -52,6 +52,18 @@ from urllib.request import url2pathname, urlopen
 _UNSAFE_NO_PROTOCOL_RE = re.compile(r"(?:\.\./|\.\.$|^/|\\|^[A-Za-z]:[/\\])")
 
 
+def _reject_unsafe_no_protocol(resource_url):
+    """
+    Reject unsafe resource strings that *omit an explicit protocol*.
+
+    Note: some no-protocol inputs are interpreted by split_resource_url() as
+    file-style paths (e.g., bare Windows drive paths like "C:/foo"). These must
+    still be rejected here when they contain unsafe patterns.
+    """
+    if _UNSAFE_NO_PROTOCOL_RE.search(resource_url):
+        raise ValueError(f"Unsafe resource path: {resource_url!r}")
+
+
 try:
     from zlib import Z_SYNC_FLUSH as FLUSH
 except ImportError:
@@ -142,7 +154,11 @@ def split_resource_url(resource_url):
 
     # Handle plain Windows drive paths like "C:/foo" or "D:/bar"
     # Treat these as file-style inputs even without "file:" prefix.
-    if len(protocol) == 1 and protocol.isalpha() and path_.startswith("/"):
+    if (
+        len(protocol) == 1
+        and protocol.isalpha()
+        and (path_.startswith("/") or path_.startswith("\\"))
+    ):
         return "file", f"/{protocol}:{path_.lstrip('/')}"
 
     if protocol == "nltk":
@@ -189,10 +205,14 @@ def normalize_resource_url(resource_url):
         protocol, name = split_resource_url(resource_url)
     except ValueError:
         # No protocol → default to 'nltk:'
-        if _UNSAFE_NO_PROTOCOL_RE.search(resource_url):
-            raise ValueError(f"Unsafe resource path: {resource_url!r}")
+        _reject_unsafe_no_protocol(resource_url)
         protocol = "nltk"
         name = resource_url
+    # If split_resource_url() inferred "file" from an input that *omitted* an explicit
+    # protocol (e.g., "C:/dir/file" or "C:\\dir\\file"), then treat it as a no-protocol
+    # input for security validation to prevent unsafe local path access.
+    if protocol == "file" and not resource_url.lower().startswith("file:"):
+        _reject_unsafe_no_protocol(resource_url)
 
     # ----------------------------------------------------------------------
     # Protocol-specific handling

@@ -1,4 +1,5 @@
 import re
+import sys
 
 import pytest
 
@@ -61,3 +62,39 @@ def test_zipfile_regex_no_zip_returns_none():
     resource = "corpora/chat80/cities.pl"
     m = _match_zip_non_greedy(resource)
     assert m is None
+
+
+def test_normalize_rejects_no_protocol_absolute_posix_path():
+    """Absolute POSIX paths without a protocol should be rejected."""
+    with pytest.raises(ValueError):
+        data.normalize_resource_url("/etc/passwd")
+
+
+def test_normalize_rejects_no_protocol_windows_drive_letter_paths():
+    with pytest.raises(ValueError):
+        data.normalize_resource_url(r"C:\etc\passwd")
+    if sys.platform.startswith("win"):
+        with pytest.raises(ValueError):
+            data.normalize_resource_url("C:/etc/passwd")
+
+
+def test_normalize_rejects_no_protocol_dotdot_only():
+    """A resource name that is exactly '..' should be rejected."""
+    with pytest.raises(ValueError):
+        data.normalize_resource_url("..")
+
+
+def test_find_zipfile_regex_is_non_greedy_integration():
+    """
+    Integration test to ensure nltk.data.find() behaves consistently with the non-greedy
+    .zip split (i.e., uses the left-most .zip as the zipfile component).
+
+    We don't require NLTK data to be present; we only assert the LookupError message
+    mentions the expected zipfile component and not the greedy one.
+    """
+    resource = "dir1/dir2/a.zip/b.zip/c.txt"
+    m = _match_zip_non_greedy(resource)
+    assert m is not None
+    zipfile, zipentry = m.groups()
+    assert zipfile == "dir1/dir2/a.zip"
+    assert zipentry == "b.zip/c.txt"

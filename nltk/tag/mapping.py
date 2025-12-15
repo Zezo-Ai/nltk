@@ -56,7 +56,9 @@ _MAPPINGS = defaultdict(lambda: defaultdict(lambda: defaultdict(lambda: "UNK")))
 
 
 def _load_universal_map(fileid):
-    contents = load(f"nltk:{_UNIVERSAL_DATA}/{fileid}.map", format="text")
+    base = "nltk:" + _UNIVERSAL_DATA.lstrip("/")
+    resource = f"{base.rstrip('/')}/{fileid}.map"
+    contents = load(resource, format="text")
 
     # When mapping to the Universal Tagset,
     # map unknown inputs to 'X' not 'UNK'

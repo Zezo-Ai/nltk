@@ -246,14 +246,14 @@ def postag(
             baseline_tagger = UnigramTagger(
                 baseline_data, backoff=baseline_backoff_tagger
             )
-            with open(cache_baseline_tagger, "w") as print_rules:
+            with open(cache_baseline_tagger, "wb") as print_rules:
                 pickle.dump(baseline_tagger, print_rules)
             print(
                 "Trained baseline tagger, pickled it to {}".format(
                     cache_baseline_tagger
                 )
             )
-        with open(cache_baseline_tagger) as print_rules:
+        with open(cache_baseline_tagger, "rb") as print_rules:
             baseline_tagger = pickle_load(print_rules)
             print(f"Reloaded pickled tagger from {cache_baseline_tagger}")
     else:
@@ -322,10 +322,10 @@ def postag(
     # serializing the tagger to a pickle file and reloading (just to see it works)
     if serialize_output is not None:
         taggedtest = brill_tagger.tag_sents(testing_data)
-        with open(serialize_output, "w") as print_rules:
+        with open(serialize_output, "wb") as print_rules:
             pickle.dump(brill_tagger, print_rules)
         print(f"Wrote pickled tagger to {serialize_output}")
-        with open(serialize_output) as print_rules:
+        with open(serialize_output, "rb") as print_rules:
             brill_tagger_reloaded = pickle_load(print_rules)
         print(f"Reloaded pickled tagger from {serialize_output}")
         taggedtest_reloaded = brill_tagger.tag_sents(testing_data)

@@ -158,6 +158,7 @@ class TestSecureUnzip:
                 try:
                     absolute_target.unlink()
                 except OSError:
+                    # Ignore cleanup errors: file may not exist or be locked.
                     pass
 
     def test_entries_resolved_outside_root_are_blocked_via_symlink(

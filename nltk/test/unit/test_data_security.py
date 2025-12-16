@@ -1,4 +1,4 @@
-import sys
+import zipfile
 
 import pytest
 
@@ -28,6 +28,23 @@ def test_normalize_allows_package_paths():
     ), "Package-style paths should be treated as 'nltk:' URLs"
 
 
+def test_find_rejects_traversal_direct_call():
+    """Defense-in-depth: direct calls to find() should reject traversal-like names."""
+    with pytest.raises(ValueError):
+        data.find("../../etc/passwd")
+
+
+def test_find_rejects_traversal_that_becomes_unsafe_after_normalization():
+    """
+    Defense-in-depth edge case: a path can become unsafe only after normalization.
+
+    Example from review: "foo/../../etc/passwd" normalizes to "../etc/passwd" and
+    must still be rejected.
+    """
+    with pytest.raises(ValueError):
+        data.find("foo/../../etc/passwd")
+
+
 def test_normalize_rejects_no_protocol_absolute_posix_path():
     """Absolute POSIX paths without a protocol should be rejected."""
     with pytest.raises(ValueError):
@@ -55,38 +72,15 @@ def test_normalize_rejects_no_protocol_dotdot_only():
         data.normalize_resource_url("..")
 
 
-def test_find_rejects_traversal_direct_call():
-    """Defense-in-depth: direct calls to find() should reject traversal-like names."""
-    with pytest.raises(ValueError):
-        data.find("../../etc/passwd")
+def test_find_zip_split_is_non_greedy(tmp_path):
+    # Create a.zip containing an entry whose name includes another ".zip".
+    zpath = tmp_path / "a.zip"
+    with zipfile.ZipFile(zpath, "w") as zf:
+        zf.writestr("b.zip/c.txt", "ok")
 
-
-def test_find_rejects_traversal_that_becomes_unsafe_after_normalization():
-    """
-    Defense-in-depth edge case: a path can become unsafe only after normalization.
-
-    Example from review: "foo/../../etc/passwd" normalizes to "../etc/passwd" and
-    must still be rejected.
-    """
-    with pytest.raises(ValueError):
-        data.find("foo/../../etc/passwd")
-
-
-def test_find_zipfile_split_is_non_greedy_integration():
-    """
-    Integration-ish test: ensure find() handles nested '.zip' paths using the
-    left-most '.zip' boundary (non-greedy behavior), without requiring NLTK data.
-
-    We force lookup failure via paths=[], then assert the error reports the exact
-    resource string we attempted to load. This exercises find()'s zip parsing
-    path and ensures it doesn't crash or mis-handle nested zip names.
-    """
-    resource = "dir1/dir2/a.zip/b.zip/c.txt"
-
-    with pytest.raises(LookupError) as excinfo:
-        data.find(resource, paths=[])
-
-    # The error message includes an "Attempted to load '...'" line in the patched code.
-    # Assert it references the original resource string (i.e., find() accepted it and
-    # proceeded through its normal logic).
-    assert resource in str(excinfo.value)
+    ptr = data.find("a.zip/b.zip/c.txt", paths=[str(tmp_path)])
+    with ptr.open() as f:
+        got = f.read()
+        if isinstance(got, bytes):
+            got = got.decode("utf-8")
+        assert got == "ok"

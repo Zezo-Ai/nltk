@@ -2311,29 +2311,33 @@ def _unzip_iter(filename, root, verbose=True):
 
     # Ensure the extraction root directory exists
     os.makedirs(root, exist_ok=True)
-    for member in zf.namelist():
 
-        # Construct target path
-        raw_target = os.path.join(root_abs, member)
-        target_abs = os.path.abspath(raw_target)
+    try:
+        for member in zf.namelist():
 
-        # Zip-Slip check (absolute/traversal/drive-letter cases)
-        if not target_abs.startswith(root_prefix):
-            yield ErrorMessage(filename, f"Zip Slip blocked: {member}")
-            continue
+            # Construct target path
+            raw_target = os.path.join(root_abs, member)
+            target_abs = os.path.abspath(raw_target)
 
-        # Symlink-escape check
-        target_real = os.path.realpath(target_abs)
-        if not target_real.startswith(root_prefix):
-            yield ErrorMessage(filename, f"Symlink escape blocked: {member}")
-            continue
+            # Zip-Slip check (absolute/traversal/drive-letter cases)
+            if not target_abs.startswith(root_prefix):
+                yield ErrorMessage(filename, f"Zip Slip blocked: {member}")
+                continue
 
-        # Safe extraction
-        try:
-            zf.extract(member, root)
-        except Exception as e:
-            yield ErrorMessage(filename, f"Extraction error for {member}: {e}")
-            continue
+            # Symlink-escape check
+            target_real = os.path.realpath(target_abs)
+            if not target_real.startswith(root_prefix):
+                yield ErrorMessage(filename, f"Symlink escape blocked: {member}")
+                continue
+
+            # Safe extraction
+            try:
+                zf.extract(member, root)
+            except Exception as e:
+                yield ErrorMessage(filename, f"Extraction error for {member}: {e}")
+                continue
+    finally:
+        zf.close()
 
     if verbose:
         print()

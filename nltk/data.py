@@ -49,7 +49,7 @@ from urllib.request import url2pathname, urlopen
 # Reject unsafe no-protocol paths: traversal segments, trailing '..', absolute paths,
 # backslashes, Windows drive letters. Use a raw-string pattern and do not anchor only
 # at the start — we'll use search() for safety checks.
-_UNSAFE_NO_PROTOCOL_RE = re.compile(r"(?:\.\./|\.\.$|^/|\\|^[A-Za-z]:[/\\])")
+_UNSAFE_NO_PROTOCOL_RE = re.compile(r"(?:\.\./|\.\.$|^/|\\|[A-Za-z]:[/\\])")
 
 
 def _reject_unsafe_no_protocol(resource_url):

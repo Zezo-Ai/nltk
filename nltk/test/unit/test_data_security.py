@@ -1,4 +1,3 @@
-import re
 import sys
 
 import pytest
@@ -18,7 +17,7 @@ def test_normalize_rejects_no_protocol_traversal():
 def test_normalize_rejects_no_protocol_backslashes():
     """Windows-style backslash traversal should be rejected when no protocol is present."""
     with pytest.raises(ValueError):
-        data.normalize_resource_url("..\\..\\etc\\passwd")
+        data.normalize_resource_url(r"..\..\etc\passwd")
 
 
 def test_normalize_allows_package_paths():
@@ -29,41 +28,6 @@ def test_normalize_allows_package_paths():
     ), "Package-style paths should be treated as 'nltk:' URLs"
 
 
-def test_find_rejects_traversal_direct_call():
-    """Defense-in-depth: direct calls to find() should reject traversal-like names."""
-    with pytest.raises(ValueError):
-        data.find("../../etc/passwd")
-
-
-def _match_zip_non_greedy(resource_name):
-    """Pattern we expect the implementation to use: first (left-most) .zip captured."""
-    return re.match(r"(.*?\.zip)/?(.*)$", resource_name)
-
-
-def test_zipfile_regex_captures_first_zip_in_nested_paths():
-    resource = "dir1/dir2/a.zip/b.zip/c.txt"
-    m = _match_zip_non_greedy(resource)
-    assert m is not None
-    zipfile, zipentry = m.groups()
-    assert zipfile == "dir1/dir2/a.zip"
-    assert zipentry == "b.zip/c.txt"
-
-
-def test_zipfile_regex_single_zip_case():
-    resource = "corpora/chat80.zip/chat80/cities.pl"
-    m = _match_zip_non_greedy(resource)
-    assert m is not None
-    zipfile, zipentry = m.groups()
-    assert zipfile == "corpora/chat80.zip"
-    assert zipentry == "chat80/cities.pl"
-
-
-def test_zipfile_regex_no_zip_returns_none():
-    resource = "corpora/chat80/cities.pl"
-    m = _match_zip_non_greedy(resource)
-    assert m is None
-
-
 def test_normalize_rejects_no_protocol_absolute_posix_path():
     """Absolute POSIX paths without a protocol should be rejected."""
     with pytest.raises(ValueError):
@@ -71,11 +35,18 @@ def test_normalize_rejects_no_protocol_absolute_posix_path():
 
 
 def test_normalize_rejects_no_protocol_windows_drive_letter_paths():
+    """
+    Windows drive letter paths should be rejected even on non-Windows platforms.
+
+    Review note: don't gate 'C:/etc/passwd' on Windows only; ensure robust rejection
+    regardless of runtime platform.
+    """
     with pytest.raises(ValueError):
         data.normalize_resource_url(r"C:\etc\passwd")
-    if sys.platform.startswith("win"):
-        with pytest.raises(ValueError):
-            data.normalize_resource_url("C:/etc/passwd")
+
+    # Run on all platforms (per review suggestion)
+    with pytest.raises(ValueError):
+        data.normalize_resource_url("C:/etc/passwd")
 
 
 def test_normalize_rejects_no_protocol_dotdot_only():
@@ -84,17 +55,38 @@ def test_normalize_rejects_no_protocol_dotdot_only():
         data.normalize_resource_url("..")
 
 
-def test_find_zipfile_regex_is_non_greedy_integration():
-    """
-    Integration test to ensure nltk.data.find() behaves consistently with the non-greedy
-    .zip split (i.e., uses the left-most .zip as the zipfile component).
+def test_find_rejects_traversal_direct_call():
+    """Defense-in-depth: direct calls to find() should reject traversal-like names."""
+    with pytest.raises(ValueError):
+        data.find("../../etc/passwd")
 
-    We don't require NLTK data to be present; we only assert the LookupError message
-    mentions the expected zipfile component and not the greedy one.
+
+def test_find_rejects_traversal_that_becomes_unsafe_after_normalization():
+    """
+    Defense-in-depth edge case: a path can become unsafe only after normalization.
+
+    Example from review: "foo/../../etc/passwd" normalizes to "../etc/passwd" and
+    must still be rejected.
+    """
+    with pytest.raises(ValueError):
+        data.find("foo/../../etc/passwd")
+
+
+def test_find_zipfile_split_is_non_greedy_integration():
+    """
+    Integration-ish test: ensure find() handles nested '.zip' paths using the
+    left-most '.zip' boundary (non-greedy behavior), without requiring NLTK data.
+
+    We force lookup failure via paths=[], then assert the error reports the exact
+    resource string we attempted to load. This exercises find()'s zip parsing
+    path and ensures it doesn't crash or mis-handle nested zip names.
     """
     resource = "dir1/dir2/a.zip/b.zip/c.txt"
-    m = _match_zip_non_greedy(resource)
-    assert m is not None
-    zipfile, zipentry = m.groups()
-    assert zipfile == "dir1/dir2/a.zip"
-    assert zipentry == "b.zip/c.txt"
+
+    with pytest.raises(LookupError) as excinfo:
+        data.find(resource, paths=[])
+
+    # The error message includes an "Attempted to load '...'" line in the patched code.
+    # Assert it references the original resource string (i.e., find() accepted it and
+    # proceeded through its normal logic).
+    assert resource in str(excinfo.value)

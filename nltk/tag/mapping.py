@@ -56,8 +56,9 @@ _MAPPINGS = defaultdict(lambda: defaultdict(lambda: defaultdict(lambda: "UNK")))
 
 
 def _load_universal_map(fileid):
-    base = "nltk:" + _UNIVERSAL_DATA.lstrip("/")
-    resource = f"{base.rstrip('/')}/{fileid}.map"
+    resource = normalize_resource_url(
+        f"nltk:{_UNIVERSAL_DATA.rstrip('/')}/{fileid.lstrip('/')}.map"
+    )
     contents = load(resource, format="text")
 
     # When mapping to the Universal Tagset,

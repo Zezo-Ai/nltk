@@ -200,6 +200,16 @@ def normalize_resource_url(resource_url):
     'https://example.com/dir/file'
     >>> normalize_resource_url('dir/file')
     'nltk:dir/file'
+
+    # Security: reject attempts to smuggle local Windows paths via the "nltk:" protocol.
+    >>> normalize_resource_url('nltk:C:/dir/file')  # doctest: +ELLIPSIS
+    Traceback (most recent call last):
+    ...
+    ValueError: Unsafe resource path: ...
+    >>> normalize_resource_url(r'nltk:C:\dir\file')  # doctest: +ELLIPSIS
+    Traceback (most recent call last):
+    ...
+    ValueError: Unsafe resource path: ...
     """
     try:
         protocol, name = split_resource_url(resource_url)
@@ -221,6 +231,10 @@ def normalize_resource_url(resource_url):
     # Case 1: nltk:<path>
     if protocol == "nltk":
         # If "nltk:" is used with an absolute path, treat it as "file://"
+        # Reject Windows drive-letter paths even when explicitly using the nltk: protocol.
+        # This prevents smuggling filesystem paths through nltk: URLs.
+        if re.match(r"^[A-Za-z]:[/\\]", name):
+            raise ValueError(f"Unsafe resource path: {resource_url!r}")
         if os.path.isabs(name):
             protocol = "file://"
             name = normalize_resource_name(name, False, None)

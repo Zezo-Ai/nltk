@@ -278,8 +278,13 @@ class PerceptronTagger(TaggerI):
         # loc can refer to zip or real FS
         if loc is None:
             loc = find(f"taggers/averaged_perceptron_tagger_{lang}/")
-        elif isinstance(loc, (str, Path)):
+        elif isinstance(loc, str):
+            # Backward compatible: strings are treated as resource names and resolved via find()
+            loc = find(loc)
+        elif isinstance(loc, Path):
+            # Explicit filesystem path
             loc = FileSystemPathPointer(str(loc))
+        # else: assume loc is already a PathPointer (zip or filesystem)
 
         def load_param(json_file):
             with open_datafile(loc, json_file) as fin:

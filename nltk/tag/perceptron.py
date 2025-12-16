@@ -10,6 +10,7 @@
 
 import json
 import logging
+import os
 import random
 from collections import defaultdict
 from os.path import join as path_join
@@ -279,8 +280,13 @@ class PerceptronTagger(TaggerI):
         if loc is None:
             loc = find(f"taggers/averaged_perceptron_tagger_{lang}/")
         elif isinstance(loc, str):
-            # Backward compatible: strings are treated as resource names and resolved via find()
-            loc = find(loc)
+            # Backward compatible:
+            # - absolute paths are explicit filesystem locations
+            # - relative strings are treated as NLTK resource names and resolved via find()
+            if os.path.isabs(loc):
+                loc = FileSystemPathPointer(loc)
+            else:
+                loc = find(loc)
         elif isinstance(loc, Path):
             # Explicit filesystem path
             loc = FileSystemPathPointer(str(loc))

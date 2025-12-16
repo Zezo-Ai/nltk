@@ -32,7 +32,7 @@ X - other: foreign words, typos, abbreviations
 from collections import defaultdict
 from os.path import join
 
-from nltk.data import load
+from nltk.data import load, normalize_resource_url
 
 _UNIVERSAL_DATA = "taggers/universal_tagset/"
 _UNIVERSAL_TAGS = (

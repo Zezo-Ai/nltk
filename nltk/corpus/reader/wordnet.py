@@ -1491,7 +1491,7 @@ class WordNetCorpusReader(CorpusReader):
         fh = self._data_file(ADJ)
         fh.seek(0)
         for line in fh:
-            match = re.search(r"Word[nN]et (\d+|\d+\.\d+) Copyright", line)
+            match = re.search(r"Word[nN]et (\d+\+?|\d+\.\d+) Copyright", line)
             if match is not None:
                 version = match.group(1)
                 fh.seek(0)

@@ -46,6 +46,24 @@ from gzip import GzipFile
 from io import BytesIO, TextIOWrapper
 from urllib.request import url2pathname, urlopen
 
+# Reject unsafe no-protocol paths: traversal segments, trailing '..', absolute paths,
+# backslashes, Windows drive letters. Use a raw-string pattern and do not anchor only
+# at the start — we'll use search() for safety checks.
+_UNSAFE_NO_PROTOCOL_RE = re.compile(r"(?:\.\./|\.\.$|^/|\\|[A-Za-z]:[/\\])")
+
+
+def _reject_unsafe_no_protocol(resource_url):
+    """
+    Reject unsafe resource strings that *omit an explicit protocol*.
+
+    Note: some no-protocol inputs are interpreted by split_resource_url() as
+    file-style paths (e.g., bare Windows drive paths like "C:/foo"). These must
+    still be rejected here when they contain unsafe patterns.
+    """
+    if _UNSAFE_NO_PROTOCOL_RE.search(resource_url):
+        raise ValueError(f"Unsafe resource path: {resource_url!r}")
+
+
 try:
     from zlib import Z_SYNC_FLUSH as FLUSH
 except ImportError:
@@ -133,6 +151,16 @@ def split_resource_url(resource_url):
     ('file', '/C:/home/nltk')
     """
     protocol, path_ = resource_url.split(":", 1)
+
+    # Handle plain Windows drive paths like "C:/foo" or "D:/bar"
+    # Treat these as file-style inputs even without "file:" prefix.
+    if (
+        len(protocol) == 1
+        and protocol.isalpha()
+        and (path_.startswith("/") or path_.startswith("\\"))
+    ):
+        return "file", f"/{protocol}:{path_.lstrip('/')}"
+
     if protocol == "nltk":
         pass
     elif protocol == "file":
@@ -140,6 +168,7 @@ def split_resource_url(resource_url):
             path_ = "/" + path_.lstrip("/")
     else:
         path_ = re.sub(r"^/{0,2}", "", path_)
+
     return protocol, path_
 
 
@@ -161,10 +190,6 @@ def normalize_resource_url(resource_url):
     True
     >>> not windows or normalize_resource_url('file:////C:/dir/file') == 'file:///C:/dir/file'
     True
-    >>> not windows or normalize_resource_url('nltk:C:/dir/file') == 'file:///C:/dir/file'
-    True
-    >>> not windows or normalize_resource_url('nltk:C:\\dir\\file') == 'file:///C:/dir/file'
-    True
     >>> windows or normalize_resource_url('file:/dir/file/toy.cfg') == 'file:///dir/file/toy.cfg'
     True
     >>> normalize_resource_url('nltk:home/nltk')
@@ -175,28 +200,58 @@ def normalize_resource_url(resource_url):
     'https://example.com/dir/file'
     >>> normalize_resource_url('dir/file')
     'nltk:dir/file'
+
+    # Security: reject attempts to smuggle local Windows paths via the "nltk:" protocol.
+    >>> normalize_resource_url('nltk:C:/dir/file')  # doctest: +ELLIPSIS
+    Traceback (most recent call last):
+    ...
+    ValueError: Unsafe resource path: ...
+    >>> normalize_resource_url(r'nltk:C:\dir\file')  # doctest: +ELLIPSIS
+    Traceback (most recent call last):
+    ...
+    ValueError: Unsafe resource path: ...
     """
     try:
         protocol, name = split_resource_url(resource_url)
     except ValueError:
-        # the resource url has no protocol, use the nltk protocol by default
+        # No protocol → default to 'nltk:'
+        _reject_unsafe_no_protocol(resource_url)
         protocol = "nltk"
         name = resource_url
-    # use file protocol if the path is an absolute path
-    if protocol == "nltk" and os.path.isabs(name):
-        protocol = "file://"
-        name = normalize_resource_name(name, False, None)
+    # If split_resource_url() inferred "file" from an input that *omitted* an explicit
+    # protocol (e.g., "C:/dir/file" or "C:\\dir\\file"), then treat it as a no-protocol
+    # input for security validation to prevent unsafe local path access.
+    if protocol == "file" and not resource_url.lower().startswith("file:"):
+        _reject_unsafe_no_protocol(resource_url)
+
+    # ----------------------------------------------------------------------
+    # Protocol-specific handling
+    # ----------------------------------------------------------------------
+
+    # Case 1: nltk:<path>
+    if protocol == "nltk":
+        # If "nltk:" is used with an absolute path, treat it as "file://"
+        # Reject Windows drive-letter paths even when explicitly using the nltk: protocol.
+        # This prevents smuggling filesystem paths through nltk: URLs.
+        if re.match(r"^[A-Za-z]:[/\\]", name):
+            raise ValueError(f"Unsafe resource path: {resource_url!r}")
+        if os.path.isabs(name):
+            protocol = "file://"
+            name = normalize_resource_name(name, False, None)
+        else:
+            protocol = "nltk:"
+            name = normalize_resource_name(name, True)
+
+    # Case 2: file:<path>
     elif protocol == "file":
         protocol = "file://"
-        # name is absolute
         name = normalize_resource_name(name, False, None)
-    elif protocol == "nltk":
-        protocol = "nltk:"
-        name = normalize_resource_name(name, True)
+
+    # Case 3: External URLs (http, https, ftp, etc.)
     else:
-        # handled by urllib
         protocol += "://"
-    return "".join([protocol, name])
+
+    return protocol + name
 
 
 def normalize_resource_name(resource_name, allow_relative=True, relative_path=None):
@@ -559,6 +614,10 @@ def find(resource_name, paths=None):
     :rtype: str
     """
     resource_name = normalize_resource_name(resource_name, True)
+    # Defense-in-depth: reject traversal/absolute paths even if caller bypassed normalize_resource_url()
+    # Use search() so traversal components anywhere in the resource_name trigger rejection.
+    if _UNSAFE_NO_PROTOCOL_RE.search(resource_name):
+        raise ValueError(f"Unsafe resource path: {resource_name!r}")
 
     # Resolve default paths at runtime in-case the user overrides
     # nltk.data.path
@@ -566,8 +625,11 @@ def find(resource_name, paths=None):
         paths = path
 
     # Check if the resource name includes a zipfile name
-    m = re.match(r"(.*\.zip)/?(.*)$|", resource_name)
-    zipfile, zipentry = m.groups()
+    m = re.match(r"(.*?\.zip)/?(.*)$", resource_name)
+    if m:
+        zipfile, zipentry = m.groups()
+    else:
+        zipfile = None
 
     # Check each item in our path
     for path_ in paths:
@@ -610,25 +672,23 @@ def find(resource_name, paths=None):
                 pass
 
     # Identify the package (i.e. the .zip file) to download.
-    resource_zipname = resource_name.split("/")[1]
+    parts = resource_name.split("/")
+    resource_zipname = parts[1] if len(parts) > 1 else parts[0]
     if resource_zipname.endswith(".zip"):
         resource_zipname = resource_zipname.rpartition(".")[0]
+
     # Display a friendly error message if the resource wasn't found:
-    msg = str(
-        "Resource \33[93m{resource}\033[0m not found.\n"
+    msg = (
+        f"Resource '{resource_zipname}' not found.\n"
         "Please use the NLTK Downloader to obtain the resource:\n\n"
-        "\33[31m"  # To display red text in terminal.
         ">>> import nltk\n"
-        ">>> nltk.download('{resource}')\n"
-        "\033[0m"
-    ).format(resource=resource_zipname)
+        f">>> nltk.download('{resource_zipname}')\n"
+    )
     msg = textwrap_indent(msg)
 
     msg += "\n  For more information see: https://www.nltk.org/data.html\n"
 
-    msg += "\n  Attempted to load \33[93m{resource_name}\033[0m\n".format(
-        resource_name=resource_name
-    )
+    msg += f"\n  Attempted to load '{resource_name}'\n"
 
     msg += "\n  Searched in:" + "".join("\n    - %r" % d for d in paths)
     sep = "*" * 70

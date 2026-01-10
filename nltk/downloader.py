@@ -2286,20 +2286,58 @@ def unzip(filename, root, verbose=True):
 
 
 def _unzip_iter(filename, root, verbose=True):
+    """
+    Secure ZIP extraction with minimal behavioural changes.
+
+    - Prevents classic Zip-Slip (.., absolute paths, drive letters)
+    - Prevents writes through pre-existing symlinks
+    - Preserves original extraction behaviour for valid archives
+    """
+
     if verbose:
         sys.stdout.write("Unzipping %s" % os.path.split(filename)[1])
         sys.stdout.flush()
 
     try:
         zf = zipfile.ZipFile(filename)
-    except zipfile.BadZipFile:
-        yield ErrorMessage(filename, "Error with downloaded zip file")
-        return
     except Exception as e:
         yield ErrorMessage(filename, e)
         return
 
-    zf.extractall(root)
+    # Canonical root
+    root_abs = os.path.abspath(root)
+    root_real = os.path.realpath(root_abs)
+    root_prefix = root_real.rstrip(os.sep) + os.sep
+
+    # Ensure the extraction root directory exists
+    os.makedirs(root, exist_ok=True)
+
+    try:
+        for member in zf.namelist():
+
+            # Construct target path
+            raw_target = os.path.join(root_abs, member)
+            target_abs = os.path.abspath(raw_target)
+
+            # Zip-Slip check (absolute/traversal/drive-letter cases)
+            if not target_abs.startswith(root_prefix):
+                yield ErrorMessage(filename, f"Zip Slip blocked: {member}")
+                continue
+
+            # Symlink-escape check
+            target_real = os.path.realpath(target_abs)
+            if not target_real.startswith(root_prefix):
+                yield ErrorMessage(filename, f"Symlink escape blocked: {member}")
+                continue
+
+            # Safe extraction
+            try:
+                zf.extract(member, root)
+            except Exception as e:
+                yield ErrorMessage(filename, f"Extraction error for {member}: {e}")
+                continue
+    finally:
+        zf.close()
 
     if verbose:
         print()

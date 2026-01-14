@@ -74,9 +74,10 @@ class StupidBackoff(LanguageModel):
         self.alpha = alpha
 
     def unmasked_score(self, word, context=None):
-        # Defensive bound to prevent unbounded recursion on long contexts
-        if context and len(context) > 50:
-            context = context[-50:]
+        if context:
+            max_ctx = self.order - 1
+            if len(context) > max_ctx:
+                context = context[-max_ctx:]
 
         if not context:
             # Base recursion
@@ -105,12 +106,15 @@ class InterpolatedLanguageModel(LanguageModel):
         self.estimator = smoothing_cls(self.vocab, self.counts, **params)
 
     def unmasked_score(self, word, context=None):
-        if context and len(context) > 50:
-            context = context[-50:]
+        if context:
+            max_ctx = self.order - 1
+            if len(context) > max_ctx:
+                context = context[-max_ctx:]
 
         if not context:
             # The base recursion case: no context, we only have a unigram.
             return self.estimator.unigram_score(word)
+
         if not self.counts[context]:
             # It can also happen that we have no data for this context.
             # In that case we defer to the lower-order ngram.
@@ -118,6 +122,7 @@ class InterpolatedLanguageModel(LanguageModel):
             alpha, gamma = 0, 1
         else:
             alpha, gamma = self.estimator.alpha_gamma(word, context)
+
         return alpha + gamma * self.unmasked_score(word, context[1:])
 
 

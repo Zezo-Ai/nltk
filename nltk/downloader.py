@@ -2287,11 +2287,16 @@ def unzip(filename, root, verbose=True):
 
 def _unzip_iter(filename, root, verbose=True):
     """
-    Secure ZIP extraction with minimal behavioural changes.
+    Secure ZIP extraction using validate-then-extract.
 
-    - Prevents classic Zip-Slip (.., absolute paths, drive letters)
-    - Prevents writes through pre-existing symlinks
-    - Preserves original extraction behaviour for valid archives
+    All members are validated before any extraction occurs.  If any member
+    fails validation the entire archive is rejected and nothing is written
+    to disk.
+
+    Checks performed on every member name:
+    - Null-byte rejection (platform path-truncation vector)
+    - Zip-Slip (.., absolute paths, drive letters)
+    - Symlink-escape (writes through pre-existing symlinks)
     """
 
     if verbose:
@@ -2304,38 +2309,44 @@ def _unzip_iter(filename, root, verbose=True):
         yield ErrorMessage(filename, e)
         return
 
-    # Canonical root
-    root_abs = os.path.abspath(root)
-    root_real = os.path.realpath(root_abs)
-    root_prefix = root_real.rstrip(os.sep) + os.sep
-
-    # Ensure the extraction root directory exists
-    os.makedirs(root, exist_ok=True)
-
     try:
-        for member in zf.namelist():
+        root_abs = os.path.abspath(root)
+        root_real = os.path.realpath(root_abs)
+        root_prefix = root_real.rstrip(os.sep) + os.sep
 
-            # Construct target path
-            raw_target = os.path.join(root_abs, member)
-            target_abs = os.path.abspath(raw_target)
+        members = zf.namelist()
 
-            # Zip-Slip check (absolute/traversal/drive-letter cases)
-            if not target_abs.startswith(root_prefix):
-                yield ErrorMessage(filename, f"Zip Slip blocked: {member}")
+        # Phase 1 -- validate every member before touching the filesystem.
+        # Note: validating up-front widens the TOCTOU window for symlink
+        # attacks compared to per-member check-then-extract, but guarantees
+        # all-or-nothing extraction semantics.
+        violations = []
+        for member in members:
+            if "\x00" in member:
+                violations.append(f"Null byte in entry name blocked: {member!r}")
                 continue
 
-            # Symlink-escape check
+            target_abs = os.path.abspath(os.path.join(root_abs, member))
+
+            if not target_abs.startswith(root_prefix):
+                violations.append(f"Zip Slip blocked: {member}")
+                continue
+
             target_real = os.path.realpath(target_abs)
             if not target_real.startswith(root_prefix):
-                yield ErrorMessage(filename, f"Symlink escape blocked: {member}")
-                continue
+                violations.append(f"Symlink escape blocked: {member}")
 
-            # Safe extraction
-            try:
-                zf.extract(member, root)
-            except Exception as e:
-                yield ErrorMessage(filename, f"Extraction error for {member}: {e}")
-                continue
+        if violations:
+            for v in violations:
+                yield ErrorMessage(filename, v)
+            return
+
+        # Phase 2 -- all members passed; extract.
+        os.makedirs(root_abs, exist_ok=True)
+        for member in members:
+            zf.extract(member, root_abs)
+    except Exception as e:
+        yield ErrorMessage(filename, f"Extraction error: {e}")
     finally:
         zf.close()
 

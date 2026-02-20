@@ -2,6 +2,7 @@ import os
 import sys
 import zipfile
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -27,17 +28,12 @@ def _run_unzip_iter(zip_path: Path, extract_root: Path, verbose: bool = False):
 
 class TestSecureUnzip:
     """
-    Tests for secure ZIP extraction behaviour in nltk.downloader._unzip_iter.
+    Tests for the validate-then-extract strategy in ``_unzip_iter``.
 
-    These tests are specifically designed so that:
-
-    * On the old implementation (using zf.extractall(root) without checks),
-      the "Zip-Slip" tests will fail because they rely on the new behaviour
-      (yielding ErrorMessage for escaping entries, and NOT writing outside
-      the extraction root).
-
-    * On the new implementation, the tests pass, because the new path
-      validation prevents escapes and emits the expected ErrorMessage.
+    The implementation scans every member for security violations (path
+    traversal, absolute paths, symlink escapes, null bytes) *before*
+    extracting anything.  If any member fails validation the entire archive
+    is rejected and nothing is written to disk.
     """
 
     def test_normal_relative_paths_are_extracted(self, tmp_path: Path) -> None:
@@ -70,43 +66,34 @@ class TestSecureUnzip:
         must not be written outside the extraction root, and must cause
         _unzip_iter to yield an ErrorMessage.
 
-        On the old implementation (extractall(root)), this test will fail
-        because the file outside the root is actually created and no
-        ErrorMessage is yielded.
+        The entire archive is rejected: even safe entries must NOT be
+        extracted when any member fails validation.
         """
         zip_path = tmp_path / "zip_slip_parent.zip"
         extract_root = tmp_path / "extract"
 
-        # This is the path that would be written if "../outside.txt" is
-        # extracted with extractall(root).
         outside_target = (extract_root / ".." / "outside.txt").resolve()
 
         members = {
             "pkg/good.txt": b"ok",
-            # This would escape extract_root if not validated.
             "../outside.txt": b"evil",
         }
         _make_zip(zip_path, members)
 
         messages = _run_unzip_iter(zip_path, extract_root, verbose=False)
 
-        # With the secure implementation, the escaping entry must be blocked
-        # and reported as an ErrorMessage.
         err_msgs = [m for m in messages if isinstance(m, ErrorMessage)]
         assert (
             err_msgs
         ), "Expected an ErrorMessage for a Zip-Slip parent-directory attempt"
 
-        # Check that the message text indicates it was blocked. Adjust to the
-        # exact wording if needed.
         combined_messages = " ".join(str(m.message) for m in err_msgs)
         assert "Zip Slip" in combined_messages and "blocked" in combined_messages
 
-        # The escaping path must not have been written.
         assert not outside_target.exists()
 
-        # The safe entry should still be extracted under the root.
-        assert (extract_root / "pkg" / "good.txt").read_bytes() == b"ok"
+        # Fail-fast: nothing should be extracted from a malicious archive.
+        assert not (extract_root / "pkg" / "good.txt").exists()
 
     @pytest.mark.skipif(
         sys.platform.startswith("win"),
@@ -118,20 +105,16 @@ class TestSecureUnzip:
         extracted as-is; it should not overwrite arbitrary filesystem paths,
         and should result in an ErrorMessage.
 
-        On the old implementation (extractall(root)), this test will fail
-        because the absolute path gets created without any ErrorMessage.
+        The entire archive is rejected when any member fails validation.
         """
         zip_path = tmp_path / "zip_slip_abs_posix.zip"
         extract_root = tmp_path / "extract"
 
-        # Choose a unique location in /tmp to avoid interfering with real files.
         absolute_target = Path("/tmp") / f"nltk_zip_slip_test_{os.getpid()}"
 
         try:
             members = {
                 "pkg/good.txt": b"ok",
-                # This absolute path should never be created by the secure
-                # implementation.
                 str(absolute_target): b"evil",
             }
             _make_zip(zip_path, members)
@@ -146,19 +129,15 @@ class TestSecureUnzip:
             combined_messages = " ".join(str(m.message) for m in err_msgs)
             assert "Zip Slip" in combined_messages and "blocked" in combined_messages
 
-            # Absolute path must not be created by the secure implementation.
             assert not absolute_target.exists()
 
-            # Safe entry must still be extracted under extract_root.
-            assert (extract_root / "pkg" / "good.txt").read_bytes() == b"ok"
+            # Fail-fast: nothing should be extracted from a malicious archive.
+            assert not (extract_root / "pkg" / "good.txt").exists()
         finally:
-            # Best-effort cleanup if the implementation under test behaves
-            # incorrectly and creates the file.
             if absolute_target.exists():
                 try:
                     absolute_target.unlink()
                 except OSError:
-                    # Ignore cleanup errors: file may not exist or be locked.
                     pass
 
     def test_entries_resolved_outside_root_are_blocked_via_symlink(
@@ -169,8 +148,7 @@ class TestSecureUnzip:
         points outside the root, writing through that symlink should not
         be allowed to escape the root.
 
-        This test documents the desired hardening to defend against this
-        class of attacks.
+        The entire archive is rejected when any member fails validation.
         """
         if not hasattr(os, "symlink"):
             pytest.skip("Symlinks not supported on this platform")
@@ -188,16 +166,15 @@ class TestSecureUnzip:
         _make_zip(zip_path, members)
 
         extract_root.mkdir()
-        # Pre-existing symlink inside extract_root pointing *outside* it.
         os.symlink(outside_dir, extract_root / "dir_link")
 
         messages = _run_unzip_iter(zip_path, extract_root, verbose=False)
 
-        # Desired property:
         assert not outside_target.exists()
-        assert (extract_root / "pkg" / "good.txt").read_bytes() == b"ok"
-        # Should yield an ErrorMessage for the blocked symlink escape
         assert any(isinstance(m, ErrorMessage) for m in messages)
+
+        # Fail-fast: nothing should be extracted from a malicious archive.
+        assert not (extract_root / "pkg" / "good.txt").exists()
 
     def test_bad_zipfile_yields_errormessage(self, tmp_path: Path) -> None:
         """
@@ -216,6 +193,81 @@ class TestSecureUnzip:
         # it should not leave partially extracted content.
         if extract_root.exists():
             assert not any(extract_root.iterdir())
+
+    def test_null_byte_in_member_name_is_blocked(self, tmp_path: Path) -> None:
+        """
+        A member name containing a null byte must be rejected.  Null bytes
+        can cause path truncation on some platforms, so they are never
+        legitimate in archive entry names.
+
+        The entire archive is rejected when any member fails validation.
+
+        Note: CPython's zipfile module truncates names at null bytes on
+        read, so we patch ``namelist()`` to simulate a library that
+        preserves them.
+        """
+        zip_path = tmp_path / "null_byte.zip"
+        extract_root = tmp_path / "extract"
+
+        _make_zip(zip_path, {"pkg/good.txt": b"ok", "pkg/evil.txt": b"evil"})
+
+        poisoned_names = ["pkg/good.txt", "pkg/evil\x00.txt"]
+
+        with patch("zipfile.ZipFile.namelist", return_value=poisoned_names):
+            messages = _run_unzip_iter(zip_path, extract_root, verbose=False)
+
+        err_msgs = [m for m in messages if isinstance(m, ErrorMessage)]
+        assert err_msgs, "Expected an ErrorMessage for null-byte entry name"
+
+        combined_messages = " ".join(str(m.message) for m in err_msgs)
+        assert "Null byte" in combined_messages and "blocked" in combined_messages
+
+        # Nothing should be extracted.
+        assert not (extract_root / "pkg" / "good.txt").exists()
+
+    def test_multiple_violation_types_all_reported_and_nothing_extracted(
+        self, tmp_path: Path
+    ) -> None:
+        """
+        An archive that combines several different violation types (path
+        traversal and absolute path) must report every violation and
+        extract nothing.  This verifies that the validation scan does not
+        short-circuit after the first bad entry.
+        """
+        zip_path = tmp_path / "multi_violation.zip"
+        extract_root = tmp_path / "extract"
+
+        absolute_target = Path("/tmp") / f"nltk_multi_viol_test_{os.getpid()}"
+
+        try:
+            members = {
+                "data/a.txt": b"aaa",
+                "../traversal.txt": b"evil1",
+                str(absolute_target): b"evil2",
+                "data/b.txt": b"bbb",
+            }
+            _make_zip(zip_path, members)
+
+            messages = _run_unzip_iter(zip_path, extract_root, verbose=False)
+
+            err_msgs = [m for m in messages if isinstance(m, ErrorMessage)]
+            assert len(err_msgs) >= 2, (
+                "Expected at least two ErrorMessages for multiple violations"
+            )
+
+            combined = " ".join(str(m.message) for m in err_msgs)
+            assert "Zip Slip" in combined
+
+            assert not absolute_target.exists()
+
+            if extract_root.exists():
+                assert not any(extract_root.iterdir())
+        finally:
+            if absolute_target.exists():
+                try:
+                    absolute_target.unlink()
+                except OSError:
+                    pass
 
     def test_unzip_iter_verbose_writes_to_stdout(self, capsys, tmp_path: Path) -> None:
         """

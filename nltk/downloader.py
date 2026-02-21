@@ -2312,33 +2312,35 @@ def _unzip_iter(filename, root, verbose=True):
     try:
         root_abs = os.path.abspath(root)
         root_real = os.path.realpath(root_abs)
-        root_prefix = root_real.rstrip(os.sep) + os.sep
+        abs_prefix = root_abs.rstrip(os.sep) + os.sep
+        real_prefix = root_real.rstrip(os.sep) + os.sep
 
         members = zf.namelist()
 
         # Phase 1 -- validate every member before touching the filesystem.
-        # Note: validating up-front widens the TOCTOU window for symlink
-        # attacks compared to per-member check-then-extract, but guarantees
+        # Validating up-front widens the TOCTOU window for symlink attacks
+        # compared to per-member check-then-extract, but guarantees
         # all-or-nothing extraction semantics.
-        violations = []
+        has_violations = False
         for member in members:
             if "\x00" in member:
-                violations.append(f"Null byte in entry name blocked: {member!r}")
+                yield ErrorMessage(filename, f"Null byte in entry name blocked: {member!r}")
+                has_violations = True
                 continue
 
             target_abs = os.path.abspath(os.path.join(root_abs, member))
 
-            if not target_abs.startswith(root_prefix):
-                violations.append(f"Zip Slip blocked: {member}")
+            if not target_abs.startswith(abs_prefix):
+                yield ErrorMessage(filename, f"Zip Slip blocked: {member}")
+                has_violations = True
                 continue
 
             target_real = os.path.realpath(target_abs)
-            if not target_real.startswith(root_prefix):
-                violations.append(f"Symlink escape blocked: {member}")
+            if not target_real.startswith(real_prefix):
+                yield ErrorMessage(filename, f"Symlink escape blocked: {member}")
+                has_violations = True
 
-        if violations:
-            for v in violations:
-                yield ErrorMessage(filename, v)
+        if has_violations:
             return
 
         # Phase 2 -- all members passed; extract.

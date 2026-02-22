@@ -66,6 +66,7 @@ or::
 
     python -m nltk.downloader [-d DATADIR] [-q] [-f] [-k] PACKAGE_IDS
 """
+
 # ----------------------------------------------------------------------
 
 """
@@ -1641,7 +1642,7 @@ class DownloaderGUI:
 
     def _info_edit(self, info_key):
         self._info_save()  # just in case.
-        (entry, callback) = self._info[info_key]
+        entry, callback = self._info[info_key]
         entry["state"] = "normal"
         entry["relief"] = "sunken"
         entry.focus()
@@ -2324,7 +2325,9 @@ def _unzip_iter(filename, root, verbose=True):
         has_violations = False
         for member in members:
             if "\x00" in member:
-                yield ErrorMessage(filename, f"Null byte in entry name blocked: {member!r}")
+                yield ErrorMessage(
+                    filename, f"Null byte in entry name blocked: {member!r}"
+                )
                 has_violations = True
                 continue
 
@@ -2480,7 +2483,7 @@ def _svn_revision(filename):
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
-    (stdout, stderr) = p.communicate()
+    stdout, stderr = p.communicate()
     if p.returncode != 0 or stderr or not stdout:
         raise ValueError(
             "Error determining svn_revision for %s: %s"
@@ -2635,7 +2638,7 @@ if __name__ == "__main__":
         help="download server index url",
     )
 
-    (options, args) = parser.parse_args()
+    options, args = parser.parse_args()
 
     downloader = Downloader(server_index_url=options.server_index_url)
 

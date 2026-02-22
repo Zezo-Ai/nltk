@@ -251,9 +251,9 @@ class TestSecureUnzip:
             messages = _run_unzip_iter(zip_path, extract_root, verbose=False)
 
             err_msgs = [m for m in messages if isinstance(m, ErrorMessage)]
-            assert len(err_msgs) >= 2, (
-                "Expected at least two ErrorMessages for multiple violations"
-            )
+            assert (
+                len(err_msgs) >= 2
+            ), "Expected at least two ErrorMessages for multiple violations"
 
             combined = " ".join(str(m.message) for m in err_msgs)
             assert "Zip Slip" in combined

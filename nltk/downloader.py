@@ -2352,15 +2352,20 @@ def _unzip_iter(filename, root, verbose=True):
         # Phase 2 -- all members passed; extract.
         try:
             os.makedirs(root_abs, exist_ok=True)
-            for member in members:
-                error = _validate_member(member)
-                if error is not None:
-                    yield ErrorMessage(filename, f"{error} (during extraction)")
-                    return
-                zf.extract(member, root_abs)
         except Exception as e:
             yield ErrorMessage(filename, f"Extraction error: {e}")
             return
+
+        for member in members:
+            error = _validate_member(member)
+            if error is not None:
+                yield ErrorMessage(filename, f"{error} (during extraction)")
+                return
+            try:
+                zf.extract(member, root_abs)
+            except Exception as e:
+                yield ErrorMessage(filename, f"Extraction error for {member}: {e}")
+                return
     except Exception as e:
         yield ErrorMessage(filename, f"Validation error: {e}")
     finally:

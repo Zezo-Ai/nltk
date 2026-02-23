@@ -2325,24 +2325,24 @@ def _unzip_iter(filename, root, verbose=True):
 
         def _validate_member(member):
             if "\x00" in member:
-                return None, f"Null byte in entry name blocked: {member!r}"
+                return f"Null byte in entry name blocked: {member!r}"
 
             target_abs = os.path.abspath(os.path.join(root_abs, member))
             if not target_abs.startswith(abs_prefix):
-                return None, f"Zip Slip blocked: {member}"
+                return f"Zip Slip blocked: {member}"
 
             target_real = os.path.realpath(target_abs)
             if not target_real.startswith(real_prefix):
-                return None, f"Symlink escape blocked: {member}"
+                return f"Symlink escape blocked: {member}"
 
-            return target_abs, None
+            return None
 
         # Phase 1 -- validate every member before touching the filesystem.
         has_violations = False
         for member in members:
-            _target_abs, validation_error = _validate_member(member)
-            if validation_error is not None:
-                yield ErrorMessage(filename, validation_error)
+            error = _validate_member(member)
+            if error is not None:
+                yield ErrorMessage(filename, error)
                 has_violations = True
                 continue
 
@@ -2353,18 +2353,16 @@ def _unzip_iter(filename, root, verbose=True):
         try:
             os.makedirs(root_abs, exist_ok=True)
             for member in members:
-                _target_abs, validation_error = _validate_member(member)
-                if validation_error is not None:
-                    yield ErrorMessage(
-                        filename, f"{validation_error} (during extraction)"
-                    )
+                error = _validate_member(member)
+                if error is not None:
+                    yield ErrorMessage(filename, f"{error} (during extraction)")
                     return
                 zf.extract(member, root_abs)
         except Exception as e:
             yield ErrorMessage(filename, f"Extraction error: {e}")
             return
     except Exception as e:
-        yield ErrorMessage(filename, f"Extraction error: {e}")
+        yield ErrorMessage(filename, f"Validation error: {e}")
     finally:
         zf.close()
         if verbose:

@@ -304,6 +304,29 @@ class TestSecureUnzip:
         # Existing filesystem content should not be removed.
         assert existing_file.read_bytes() == b"keep-me"
 
+    def test_namelist_raises_yields_errormessage(self, tmp_path: Path) -> None:
+        """
+        If ``zf.namelist()`` itself raises (e.g. corrupted central directory),
+        an ErrorMessage must be yielded and the zip file must be closed.
+        """
+        zip_path = tmp_path / "namelist_bomb.zip"
+        extract_root = tmp_path / "extract"
+
+        _make_zip(zip_path, {"pkg/file.txt": b"data"})
+
+        with patch(
+            "nltk.downloader.zipfile.ZipFile.namelist",
+            side_effect=RuntimeError("corrupted central directory"),
+        ):
+            messages = _run_unzip_iter(zip_path, extract_root, verbose=False)
+
+        err_msgs = [m for m in messages if isinstance(m, ErrorMessage)]
+        assert err_msgs, "Expected an ErrorMessage when namelist() raises"
+        assert any("corrupted central directory" in str(m.message) for m in err_msgs)
+
+        if extract_root.exists():
+            assert not any(extract_root.iterdir())
+
     def test_unzip_iter_verbose_writes_to_stdout(self, capsys, tmp_path: Path) -> None:
         """
         When verbose=True, _unzip_iter should write a status line to stdout.
@@ -318,3 +341,18 @@ class TestSecureUnzip:
         _run_unzip_iter(zip_path, extract_root, verbose=True)
         captured = capsys.readouterr()
         assert "Unzipping" in captured.out
+
+    def test_verbose_output_on_corrupt_zip(self, capsys, tmp_path: Path) -> None:
+        """
+        When verbose=True and the file is not a valid zip, the output line
+        must still be terminated with a newline so the terminal is left in
+        a clean state.
+        """
+        zip_path = tmp_path / "corrupt.txt"
+        zip_path.write_bytes(b"not a zip")
+        extract_root = tmp_path / "extract"
+
+        _run_unzip_iter(zip_path, extract_root, verbose=True)
+        captured = capsys.readouterr()
+        assert "Unzipping" in captured.out
+        assert captured.out.endswith("\n")

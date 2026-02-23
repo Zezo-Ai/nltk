@@ -213,7 +213,10 @@ class TestSecureUnzip:
 
         poisoned_names = ["pkg/good.txt", "pkg/evil\x00.txt"]
 
-        with patch("zipfile.ZipFile.namelist", return_value=poisoned_names):
+        with patch(
+            "nltk.downloader.zipfile.ZipFile.namelist",
+            return_value=poisoned_names,
+        ):
             messages = _run_unzip_iter(zip_path, extract_root, verbose=False)
 
         err_msgs = [m for m in messages if isinstance(m, ErrorMessage)]
@@ -272,6 +275,34 @@ class TestSecureUnzip:
                     absolute_target.unlink()
                 except OSError:
                     pass
+
+    def test_extraction_error_does_not_delete_preexisting_root_content(
+        self, tmp_path: Path
+    ) -> None:
+        """
+        If extraction fails mid-stream, pre-existing content under the
+        extraction root must be preserved.
+        """
+        zip_path = tmp_path / "extract_error.zip"
+        extract_root = tmp_path / "extract"
+        existing_file = extract_root / "already_there.txt"
+
+        _make_zip(zip_path, {"pkg/file.txt": b"data"})
+        extract_root.mkdir()
+        existing_file.write_bytes(b"keep-me")
+
+        with patch(
+            "nltk.downloader.zipfile.ZipFile.extract",
+            side_effect=OSError("simulated extraction failure"),
+        ):
+            messages = _run_unzip_iter(zip_path, extract_root, verbose=False)
+
+        err_msgs = [m for m in messages if isinstance(m, ErrorMessage)]
+        assert err_msgs, "Expected extraction failure to yield an ErrorMessage"
+        assert any("Extraction error" in str(m.message) for m in err_msgs)
+
+        # Existing filesystem content should not be removed.
+        assert existing_file.read_bytes() == b"keep-me"
 
     def test_unzip_iter_verbose_writes_to_stdout(self, capsys, tmp_path: Path) -> None:
         """

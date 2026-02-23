@@ -2297,6 +2297,10 @@ def _unzip_iter(filename, root, verbose=True):
     - Null-byte rejection (platform path-truncation vector)
     - Zip-Slip (.., absolute paths, drive letters)
     - Symlink-escape (writes through pre-existing symlinks)
+
+    Members are validated again immediately before each extraction.  This
+    narrows (but does not eliminate) TOCTOU windows caused by filesystem
+    changes between validation and write.
     """
 
     if verbose:
@@ -2319,29 +2323,26 @@ def _unzip_iter(filename, root, verbose=True):
 
         members = zf.namelist()
 
-        # Phase 1 -- validate every member before touching the filesystem.
-        # Validating up-front widens the TOCTOU window for symlink attacks
-        # compared to per-member check-then-extract, but guarantees
-        # all-or-nothing extraction semantics.
-        has_violations = False
-        for member in members:
+        def _validate_member(member):
             if "\x00" in member:
-                yield ErrorMessage(
-                    filename, f"Null byte in entry name blocked: {member!r}"
-                )
-                has_violations = True
-                continue
+                return None, f"Null byte in entry name blocked: {member!r}"
 
             target_abs = os.path.abspath(os.path.join(root_abs, member))
-
             if not target_abs.startswith(abs_prefix):
-                yield ErrorMessage(filename, f"Zip Slip blocked: {member}")
-                has_violations = True
-                continue
+                return None, f"Zip Slip blocked: {member}"
 
             target_real = os.path.realpath(target_abs)
             if not target_real.startswith(real_prefix):
-                yield ErrorMessage(filename, f"Symlink escape blocked: {member}")
+                return None, f"Symlink escape blocked: {member}"
+
+            return target_abs, None
+
+        # Phase 1 -- validate every member before touching the filesystem.
+        has_violations = False
+        for member in members:
+            _target_abs, validation_error = _validate_member(member)
+            if validation_error is not None:
+                yield ErrorMessage(filename, validation_error)
                 has_violations = True
                 continue
 
@@ -2352,6 +2353,12 @@ def _unzip_iter(filename, root, verbose=True):
         try:
             os.makedirs(root_abs, exist_ok=True)
             for member in members:
+                _target_abs, validation_error = _validate_member(member)
+                if validation_error is not None:
+                    yield ErrorMessage(
+                        filename, f"{validation_error} (during extraction)"
+                    )
+                    return
                 zf.extract(member, root_abs)
         except Exception as e:
             yield ErrorMessage(filename, f"Extraction error: {e}")

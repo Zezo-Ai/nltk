@@ -162,7 +162,6 @@ default: unzip or not?
 import functools
 import itertools
 import os
-import shutil
 import subprocess
 import sys
 import textwrap
@@ -2308,6 +2307,8 @@ def _unzip_iter(filename, root, verbose=True):
         zf = zipfile.ZipFile(filename)
     except Exception as e:
         yield ErrorMessage(filename, e)
+        if verbose:
+            print()
         return
 
     try:
@@ -2353,19 +2354,14 @@ def _unzip_iter(filename, root, verbose=True):
             for member in members:
                 zf.extract(member, root_abs)
         except Exception as e:
-            try:
-                shutil.rmtree(root_abs)
-            except Exception:
-                pass
             yield ErrorMessage(filename, f"Extraction error: {e}")
             return
     except Exception as e:
         yield ErrorMessage(filename, f"Extraction error: {e}")
     finally:
         zf.close()
-
-    if verbose:
-        print()
+        if verbose:
+            print()
 
 
 ######################################################################

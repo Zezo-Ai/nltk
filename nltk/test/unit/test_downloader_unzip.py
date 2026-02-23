@@ -225,6 +225,10 @@ class TestSecureUnzip:
         # Nothing should be extracted.
         assert not (extract_root / "pkg" / "good.txt").exists()
 
+    @pytest.mark.skipif(
+        sys.platform.startswith("win"),
+        reason="Absolute POSIX paths are not meaningful on Windows",
+    )
     def test_multiple_violation_types_all_reported_and_nothing_extracted(
         self, tmp_path: Path
     ) -> None:

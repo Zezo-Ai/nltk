@@ -2342,14 +2342,23 @@ def _unzip_iter(filename, root, verbose=True):
             if not target_real.startswith(real_prefix):
                 yield ErrorMessage(filename, f"Symlink escape blocked: {member}")
                 has_violations = True
+                continue
 
         if has_violations:
             return
 
         # Phase 2 -- all members passed; extract.
-        os.makedirs(root_abs, exist_ok=True)
-        for member in members:
-            zf.extract(member, root_abs)
+        try:
+            os.makedirs(root_abs, exist_ok=True)
+            for member in members:
+                zf.extract(member, root_abs)
+        except Exception as e:
+            try:
+                shutil.rmtree(root_abs)
+            except Exception:
+                pass
+            yield ErrorMessage(filename, f"Extraction error: {e}")
+            return
     except Exception as e:
         yield ErrorMessage(filename, f"Extraction error: {e}")
     finally:

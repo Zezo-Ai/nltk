@@ -2298,6 +2298,9 @@ def _unzip_iter(filename, root, verbose=True):
     - Zip-Slip (.., absolute paths, drive letters)
     - Symlink-escape (writes through pre-existing symlinks)
 
+    All path comparisons use ``os.path.normcase`` so that the checks
+    are case-insensitive on Windows (no-op on POSIX).
+
     Members are validated again immediately before each extraction.  This
     narrows (but does not eliminate) TOCTOU windows caused by filesystem
     changes between validation and write.
@@ -2316,8 +2319,8 @@ def _unzip_iter(filename, root, verbose=True):
         return
 
     try:
-        root_abs = os.path.abspath(root)
-        root_real = os.path.realpath(root_abs)
+        root_abs = os.path.normcase(os.path.abspath(root))
+        root_real = os.path.normcase(os.path.realpath(root_abs))
         abs_prefix = root_abs.rstrip(os.sep) + os.sep
         real_prefix = root_real.rstrip(os.sep) + os.sep
 
@@ -2327,11 +2330,13 @@ def _unzip_iter(filename, root, verbose=True):
             if "\x00" in member:
                 return f"Null byte in entry name blocked: {member!r}"
 
-            target_abs = os.path.abspath(os.path.join(root_abs, member))
+            target_abs = os.path.normcase(
+                os.path.abspath(os.path.join(root_abs, member))
+            )
             if not target_abs.startswith(abs_prefix):
                 return f"Zip Slip blocked: {member}"
 
-            target_real = os.path.realpath(target_abs)
+            target_real = os.path.normcase(os.path.realpath(target_abs))
             if not target_real.startswith(real_prefix):
                 return f"Symlink escape blocked: {member}"
 

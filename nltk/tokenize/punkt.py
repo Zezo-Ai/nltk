@@ -284,7 +284,7 @@ class PunktLanguageVars:
         including possible sentence boundaries."""
         try:
             return self._re_period_context
-        except:
+        except Exception:
             self._re_period_context = re.compile(
                 self._period_context_fmt
                 % {

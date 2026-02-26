@@ -184,7 +184,7 @@ class ChartMatrixView:
             return
         try:
             self._root.destroy()
-        except:
+        except Exception:
             pass
         self._root = None
 
@@ -248,7 +248,7 @@ class ChartMatrixView:
         else:
             try:
                 del self._callbacks[event][func]
-            except:
+            except Exception:
                 pass
 
     def _fire_callbacks(self, event, *args):
@@ -528,7 +528,7 @@ class ChartResultsView:
             return
         try:
             self._root.destroy()
-        except:
+        except Exception:
             pass
         self._root = None
 
@@ -618,7 +618,7 @@ class ChartComparer:
             return
         try:
             self._root.destroy()
-        except:
+        except Exception:
             pass
         self._root = None
 
@@ -1718,7 +1718,7 @@ class ChartView:
         else:
             try:
                 del self._callbacks[event][func]
-            except:
+            except Exception:
                 pass
 
     def _fire_callbacks(self, event, *args):
@@ -1811,7 +1811,7 @@ class ChartParserApp:
             # Set up keyboard bindings.
             self._init_bindings()
 
-        except:
+        except Exception:
             print("Error creating Tree View")
             self.destroy()
             raise
@@ -2237,7 +2237,7 @@ class ChartParserApp:
                 width=75,
                 font="fixed",
             )
-        except:
+        except Exception:
             ShowText(
                 self._root,
                 "Help: Chart Parser Application",

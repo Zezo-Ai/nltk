@@ -1111,7 +1111,7 @@ def train_maxent_classifier_with_gis(
 
     except KeyboardInterrupt:
         print("      Training stopped: keyboard interrupt")
-    except:
+    except Exception:
         raise
 
     if trace > 2:
@@ -1231,7 +1231,7 @@ def train_maxent_classifier_with_iis(
 
     except KeyboardInterrupt:
         print("      Training stopped: keyboard interrupt")
-    except:
+    except Exception:
         raise
 
     if trace > 2:

@@ -880,9 +880,27 @@ class Downloader:
         if filestat.st_size != int(info.size):
             return self.STALE
 
-        # Check if the file's checksum matches
-        if sha256_hexdigest(filepath) != info.sha256_checksum:
-            return self.STALE
+        # Check if the file's checksum matches.
+        # Prefer sha256, but fall back to legacy md5 if sha256 is unavailable.
+        sha256_checksum = getattr(info, "sha256_checksum", None)
+        if sha256_checksum:
+            if sha256_hexdigest(filepath) != sha256_checksum:
+                return self.STALE
+        else:
+            if not getattr(self, "_warned_missing_sha256_checksum", False):
+                warnings.warn(
+                    "NLTK downloader package metadata is missing SHA256 checksums; "
+                    "falling back to legacy MD5 verification. Consider updating your "
+                    "NLTK data index (or re-running the downloader) to get SHA256 checksums.",
+                    RuntimeWarning,
+                )
+                self._warned_missing_sha256_checksum = True
+
+            md5_checksum = getattr(info, "checksum", None)
+            if not md5_checksum:
+                return self.STALE
+            if md5_hexdigest(filepath) != md5_checksum:
+                return self.STALE
 
         # If it's a zipfile, and it's been at least partially
         # unzipped, then check if it's been fully unzipped.

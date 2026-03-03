@@ -2285,6 +2285,39 @@ def unzip(filename, root, verbose=True):
             raise Exception(message)
 
 
+def _validate_member(member, root_abs, abs_prefix, real_prefix):
+    """
+    Check a single ZIP member name for path-traversal and escape vectors.
+
+    Returns ``None`` if the member is safe, or a human-readable error
+    string if the member must be rejected.
+
+    Parameters
+    ----------
+    member : str
+        The archive entry name (forward-slash separated, as stored in the ZIP).
+    root_abs : str
+        Absolute path of the extraction root (used to build candidate paths).
+    abs_prefix : str
+        ``os.path.normcase(root_abs)`` with a trailing ``os.sep``.
+    real_prefix : str
+        ``os.path.normcase(os.path.realpath(root_abs))`` with a trailing
+        ``os.sep``.
+    """
+    if "\x00" in member:
+        return f"Null byte in entry name blocked: {member!r}"
+
+    target_abs = os.path.normcase(os.path.abspath(os.path.join(root_abs, member)))
+    if not target_abs.startswith(abs_prefix):
+        return f"Zip Slip blocked: {member}"
+
+    target_real = os.path.normcase(os.path.realpath(os.path.join(root_abs, member)))
+    if not target_real.startswith(real_prefix):
+        return f"Symlink escape blocked: {member}"
+
+    return None
+
+
 def _unzip_iter(filename, root, verbose=True):
     """
     Secure ZIP extraction using validate-then-extract.
@@ -2304,6 +2337,10 @@ def _unzip_iter(filename, root, verbose=True):
     Members are validated again immediately before each extraction.  This
     narrows (but does not eliminate) TOCTOU windows caused by filesystem
     changes between validation and write.
+
+    Extraction aborts on the first error (including I/O errors) rather
+    than skipping individual members.  Partial extraction of a potentially
+    malicious archive is worse than no extraction.
     """
 
     if verbose:
@@ -2327,28 +2364,10 @@ def _unzip_iter(filename, root, verbose=True):
 
         members = zf.namelist()
 
-        def _validate_member(member):
-            if "\x00" in member:
-                return f"Null byte in entry name blocked: {member!r}"
-
-            target_abs = os.path.normcase(
-                os.path.abspath(os.path.join(root_abs, member))
-            )
-            if not target_abs.startswith(abs_prefix):
-                return f"Zip Slip blocked: {member}"
-
-            target_real = os.path.normcase(
-                os.path.realpath(os.path.join(root_abs, member))
-            )
-            if not target_real.startswith(real_prefix):
-                return f"Symlink escape blocked: {member}"
-
-            return None
-
         # Phase 1 -- validate every member before touching the filesystem.
         has_violations = False
         for member in members:
-            error = _validate_member(member)
+            error = _validate_member(member, root_abs, abs_prefix, real_prefix)
             if error is not None:
                 yield ErrorMessage(filename, error)
                 has_violations = True
@@ -2365,7 +2384,7 @@ def _unzip_iter(filename, root, verbose=True):
             return
 
         for member in members:
-            error = _validate_member(member)
+            error = _validate_member(member, root_abs, abs_prefix, real_prefix)
             if error is not None:
                 yield ErrorMessage(filename, f"{error} (during extraction)")
                 return

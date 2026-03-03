@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
-from nltk.downloader import ErrorMessage, _unzip_iter
+from nltk.downloader import ErrorMessage, _unzip_iter, _validate_member
 
 
 def _make_zip(file_path: Path, members: dict[str, bytes]) -> None:
@@ -24,6 +24,17 @@ def _run_unzip_iter(zip_path: Path, extract_root: Path, verbose: bool = False):
     messages (if any).
     """
     return list(_unzip_iter(str(zip_path), str(extract_root), verbose=verbose))
+
+
+def _assert_blocked(messages, *expected_substrings):
+    """Assert that *messages* contain at least one ``ErrorMessage`` whose
+    text includes every string in *expected_substrings*."""
+    err_msgs = [m for m in messages if isinstance(m, ErrorMessage)]
+    assert err_msgs, f"Expected ErrorMessage(s) containing {expected_substrings!r}"
+    combined = " ".join(str(m.message) for m in err_msgs)
+    for s in expected_substrings:
+        assert s in combined, f"Expected {s!r} in error output: {combined}"
+    return err_msgs
 
 
 class TestSecureUnzip:
@@ -52,7 +63,6 @@ class TestSecureUnzip:
 
         messages = _run_unzip_iter(zip_path, extract_root, verbose=False)
 
-        # No ErrorMessage should be yielded for valid archives.
         assert not any(isinstance(m, ErrorMessage) for m in messages)
 
         assert (extract_root / "pkg" / "file.txt").read_bytes() == b"hello"
@@ -82,14 +92,7 @@ class TestSecureUnzip:
 
         messages = _run_unzip_iter(zip_path, extract_root, verbose=False)
 
-        err_msgs = [m for m in messages if isinstance(m, ErrorMessage)]
-        assert (
-            err_msgs
-        ), "Expected an ErrorMessage for a Zip-Slip parent-directory attempt"
-
-        combined_messages = " ".join(str(m.message) for m in err_msgs)
-        assert "Zip Slip" in combined_messages and "blocked" in combined_messages
-
+        _assert_blocked(messages, "Zip Slip", "blocked")
         assert not outside_target.exists()
 
         # Fail-fast: nothing should be extracted from a malicious archive.
@@ -121,13 +124,7 @@ class TestSecureUnzip:
 
             messages = _run_unzip_iter(zip_path, extract_root, verbose=False)
 
-            err_msgs = [m for m in messages if isinstance(m, ErrorMessage)]
-            assert (
-                err_msgs
-            ), "Expected an ErrorMessage for absolute-path Zip-Slip attempt"
-
-            combined_messages = " ".join(str(m.message) for m in err_msgs)
-            assert "Zip Slip" in combined_messages and "blocked" in combined_messages
+            _assert_blocked(messages, "Zip Slip", "blocked")
 
             assert not absolute_target.exists()
 
@@ -174,7 +171,7 @@ class TestSecureUnzip:
         messages = _run_unzip_iter(zip_path, extract_root, verbose=False)
 
         assert not outside_target.exists()
-        assert any(isinstance(m, ErrorMessage) for m in messages)
+        _assert_blocked(messages, "Symlink escape", "blocked")
 
         # Fail-fast: nothing should be extracted from a malicious archive.
         assert not (extract_root / "pkg" / "good.txt").exists()
@@ -192,8 +189,6 @@ class TestSecureUnzip:
 
         assert any(isinstance(m, ErrorMessage) for m in messages)
 
-        # If the implementation chooses to create the root directory at all,
-        # it should not leave partially extracted content.
         if extract_root.exists():
             assert not any(extract_root.iterdir())
 
@@ -219,16 +214,14 @@ class TestSecureUnzip:
         with patch(
             "nltk.downloader.zipfile.ZipFile.namelist",
             return_value=poisoned_names,
-        ):
+        ), patch(
+            "nltk.downloader.zipfile.ZipFile.extract",
+        ) as mock_extract:
             messages = _run_unzip_iter(zip_path, extract_root, verbose=False)
 
-        err_msgs = [m for m in messages if isinstance(m, ErrorMessage)]
-        assert err_msgs, "Expected an ErrorMessage for null-byte entry name"
+        _assert_blocked(messages, "Null byte", "blocked")
+        mock_extract.assert_not_called()
 
-        combined_messages = " ".join(str(m.message) for m in err_msgs)
-        assert "Null byte" in combined_messages and "blocked" in combined_messages
-
-        # Nothing should be extracted.
         assert not (extract_root / "pkg" / "good.txt").exists()
 
     @pytest.mark.skipif(
@@ -260,13 +253,8 @@ class TestSecureUnzip:
 
             messages = _run_unzip_iter(zip_path, extract_root, verbose=False)
 
-            err_msgs = [m for m in messages if isinstance(m, ErrorMessage)]
-            assert (
-                len(err_msgs) >= 2
-            ), "Expected at least two ErrorMessages for multiple violations"
-
-            combined = " ".join(str(m.message) for m in err_msgs)
-            assert "Zip Slip" in combined
+            err_msgs = _assert_blocked(messages, "Zip Slip")
+            assert len(err_msgs) >= 2, "Expected at least two ErrorMessages"
 
             assert not absolute_target.exists()
 
@@ -300,11 +288,8 @@ class TestSecureUnzip:
         ):
             messages = _run_unzip_iter(zip_path, extract_root, verbose=False)
 
-        err_msgs = [m for m in messages if isinstance(m, ErrorMessage)]
-        assert err_msgs, "Expected extraction failure to yield an ErrorMessage"
-        assert any("Extraction error" in str(m.message) for m in err_msgs)
+        _assert_blocked(messages, "Extraction error")
 
-        # Existing filesystem content should not be removed.
         assert existing_file.read_bytes() == b"keep-me"
 
     def test_namelist_raises_yields_errormessage(self, tmp_path: Path) -> None:
@@ -323,9 +308,7 @@ class TestSecureUnzip:
         ):
             messages = _run_unzip_iter(zip_path, extract_root, verbose=False)
 
-        err_msgs = [m for m in messages if isinstance(m, ErrorMessage)]
-        assert err_msgs, "Expected an ErrorMessage when namelist() raises"
-        assert any("corrupted central directory" in str(m.message) for m in err_msgs)
+        _assert_blocked(messages, "corrupted central directory")
 
         if extract_root.exists():
             assert not any(extract_root.iterdir())
@@ -359,3 +342,77 @@ class TestSecureUnzip:
         captured = capsys.readouterr()
         assert "Unzipping" in captured.out
         assert captured.out.endswith("\n")
+
+
+class TestValidateMember:
+    """Direct unit tests for ``_validate_member`` path validation logic."""
+
+    @staticmethod
+    def _prefixes(root_abs):
+        """Compute abs_prefix and real_prefix for a given root."""
+        abs_prefix = os.path.normcase(root_abs).rstrip(os.sep) + os.sep
+        real_prefix = (
+            os.path.normcase(os.path.realpath(root_abs)).rstrip(os.sep) + os.sep
+        )
+        return abs_prefix, real_prefix
+
+    def test_safe_relative_path_passes(self, tmp_path):
+        root = str(tmp_path / "root")
+        abs_p, real_p = self._prefixes(root)
+        assert _validate_member("pkg/file.txt", root, abs_p, real_p) is None
+
+    def test_parent_traversal_blocked(self, tmp_path):
+        root = str(tmp_path / "root")
+        abs_p, real_p = self._prefixes(root)
+        result = _validate_member("../evil.txt", root, abs_p, real_p)
+        assert result is not None and "Zip Slip" in result
+
+    def test_deeply_nested_traversal_blocked(self, tmp_path):
+        root = str(tmp_path / "root")
+        abs_p, real_p = self._prefixes(root)
+        result = _validate_member("a/b/c/../../../../evil.txt", root, abs_p, real_p)
+        assert result is not None and "Zip Slip" in result
+
+    def test_null_byte_blocked(self, tmp_path):
+        root = str(tmp_path / "root")
+        abs_p, real_p = self._prefixes(root)
+        result = _validate_member("pkg/evil\x00.txt", root, abs_p, real_p)
+        assert result is not None and "Null byte" in result
+
+    @pytest.mark.skipif(
+        sys.platform.startswith("win"),
+        reason="Absolute POSIX paths are not meaningful on Windows",
+    )
+    def test_absolute_posix_path_blocked(self, tmp_path):
+        root = str(tmp_path / "root")
+        abs_p, real_p = self._prefixes(root)
+        result = _validate_member("/etc/passwd", root, abs_p, real_p)
+        assert result is not None and "Zip Slip" in result
+
+    @pytest.mark.skipif(
+        not sys.platform.startswith("win"),
+        reason="Drive-letter paths are only meaningful on Windows",
+    )
+    def test_windows_drive_letter_blocked(self, tmp_path):
+        root = str(tmp_path / "root")
+        abs_p, real_p = self._prefixes(root)
+        result = _validate_member("C:\\Windows\\evil.txt", root, abs_p, real_p)
+        assert result is not None and "Zip Slip" in result
+
+    def test_normcase_is_applied_to_path_comparisons(self, tmp_path):
+        """Simulate case-folding normcase (as on Windows) to verify that
+        _validate_member applies it to both target and prefix paths."""
+        root = str(tmp_path / "Root")
+        original_normcase = os.path.normcase
+
+        def case_folding_normcase(p):
+            return original_normcase(p).lower()
+
+        abs_p = case_folding_normcase(root).rstrip(os.sep) + os.sep
+        real_p = case_folding_normcase(os.path.realpath(root)).rstrip(os.sep) + os.sep
+
+        with patch("os.path.normcase", side_effect=case_folding_normcase):
+            assert _validate_member("pkg/file.txt", root, abs_p, real_p) is None
+
+            result = _validate_member("../evil.txt", root, abs_p, real_p)
+            assert result is not None and "Zip Slip" in result

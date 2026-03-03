@@ -347,36 +347,23 @@ class TestSecureUnzip:
 class TestValidateMember:
     """Direct unit tests for ``_validate_member`` path validation logic."""
 
-    @staticmethod
-    def _prefixes(root_abs):
-        """Compute abs_prefix and real_prefix for a given root."""
-        abs_prefix = os.path.normcase(root_abs).rstrip(os.sep) + os.sep
-        real_prefix = (
-            os.path.normcase(os.path.realpath(root_abs)).rstrip(os.sep) + os.sep
-        )
-        return abs_prefix, real_prefix
-
     def test_safe_relative_path_passes(self, tmp_path):
         root = str(tmp_path / "root")
-        abs_p, real_p = self._prefixes(root)
-        assert _validate_member("pkg/file.txt", root, abs_p, real_p) is None
+        assert _validate_member("pkg/file.txt", root) is None
 
     def test_parent_traversal_blocked(self, tmp_path):
         root = str(tmp_path / "root")
-        abs_p, real_p = self._prefixes(root)
-        result = _validate_member("../evil.txt", root, abs_p, real_p)
+        result = _validate_member("../evil.txt", root)
         assert result is not None and "Zip Slip" in result
 
     def test_deeply_nested_traversal_blocked(self, tmp_path):
         root = str(tmp_path / "root")
-        abs_p, real_p = self._prefixes(root)
-        result = _validate_member("a/b/c/../../../../evil.txt", root, abs_p, real_p)
+        result = _validate_member("a/b/c/../../../../evil.txt", root)
         assert result is not None and "Zip Slip" in result
 
     def test_null_byte_blocked(self, tmp_path):
         root = str(tmp_path / "root")
-        abs_p, real_p = self._prefixes(root)
-        result = _validate_member("pkg/evil\x00.txt", root, abs_p, real_p)
+        result = _validate_member("pkg/evil\x00.txt", root)
         assert result is not None and "Null byte" in result
 
     @pytest.mark.skipif(
@@ -385,8 +372,7 @@ class TestValidateMember:
     )
     def test_absolute_posix_path_blocked(self, tmp_path):
         root = str(tmp_path / "root")
-        abs_p, real_p = self._prefixes(root)
-        result = _validate_member("/etc/passwd", root, abs_p, real_p)
+        result = _validate_member("/etc/passwd", root)
         assert result is not None and "Zip Slip" in result
 
     @pytest.mark.skipif(
@@ -395,9 +381,19 @@ class TestValidateMember:
     )
     def test_windows_drive_letter_blocked(self, tmp_path):
         root = str(tmp_path / "root")
-        abs_p, real_p = self._prefixes(root)
-        result = _validate_member("C:\\Windows\\evil.txt", root, abs_p, real_p)
+        result = _validate_member("C:\\Windows\\evil.txt", root)
         assert result is not None and "Zip Slip" in result
+
+    def test_backslash_traversal(self, tmp_path):
+        """On Windows, backslash is a path separator so ``..\\evil.txt``
+        is a traversal attack.  On POSIX, backslash is a literal filename
+        character and the member name is harmless."""
+        root = str(tmp_path / "root")
+        result = _validate_member("..\\evil.txt", root)
+        if sys.platform.startswith("win"):
+            assert result is not None and "Zip Slip" in result
+        else:
+            assert result is None
 
     def test_normcase_is_applied_to_path_comparisons(self, tmp_path):
         """Simulate case-folding normcase (as on Windows) to verify that
@@ -408,11 +404,11 @@ class TestValidateMember:
         def case_folding_normcase(p):
             return original_normcase(p).lower()
 
-        abs_p = case_folding_normcase(root).rstrip(os.sep) + os.sep
-        real_p = case_folding_normcase(os.path.realpath(root)).rstrip(os.sep) + os.sep
+        with patch(
+            "nltk.downloader.os.path.normcase",
+            side_effect=case_folding_normcase,
+        ):
+            assert _validate_member("pkg/file.txt", root) is None
 
-        with patch("os.path.normcase", side_effect=case_folding_normcase):
-            assert _validate_member("pkg/file.txt", root, abs_p, real_p) is None
-
-            result = _validate_member("../evil.txt", root, abs_p, real_p)
+            result = _validate_member("../evil.txt", root)
             assert result is not None and "Zip Slip" in result

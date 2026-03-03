@@ -66,6 +66,7 @@ or::
 
     python -m nltk.downloader [-d DATADIR] [-q] [-f] [-k] PACKAGE_IDS
 """
+
 # ----------------------------------------------------------------------
 
 """
@@ -161,7 +162,6 @@ default: unzip or not?
 import functools
 import itertools
 import os
-import shutil
 import subprocess
 import sys
 import textwrap
@@ -1641,7 +1641,7 @@ class DownloaderGUI:
 
     def _info_edit(self, info_key):
         self._info_save()  # just in case.
-        (entry, callback) = self._info[info_key]
+        entry, callback = self._info[info_key]
         entry["state"] = "normal"
         entry["relief"] = "sunken"
         entry.focus()
@@ -2285,13 +2285,63 @@ def unzip(filename, root, verbose=True):
             raise Exception(message)
 
 
+def _validate_member(member, root_abs):
+    """
+    Check a single ZIP member name for path-traversal and escape vectors.
+
+    Returns ``None`` if the member is safe, or a human-readable error
+    string if the member must be rejected.  Comparison prefixes are
+    derived from *root_abs* internally via ``os.path.normcase`` so that
+    callers cannot supply inconsistent values.
+
+    Parameters
+    ----------
+    member : str
+        The archive entry name (forward-slash separated, as stored in the ZIP).
+    root_abs : str
+        Absolute path of the extraction root (used to build candidate paths
+        and derive comparison prefixes via ``os.path.normcase``).
+    """
+    if "\x00" in member:
+        return f"Null byte in entry name blocked: {member!r}"
+
+    abs_prefix = os.path.normcase(root_abs).rstrip(os.sep) + os.sep
+    target_abs = os.path.normcase(os.path.abspath(os.path.join(root_abs, member)))
+    if not target_abs.startswith(abs_prefix):
+        return f"Zip Slip blocked: {member}"
+
+    real_prefix = os.path.normcase(os.path.realpath(root_abs)).rstrip(os.sep) + os.sep
+    target_real = os.path.normcase(os.path.realpath(os.path.join(root_abs, member)))
+    if not target_real.startswith(real_prefix):
+        return f"Symlink escape blocked: {member}"
+
+    return None
+
+
 def _unzip_iter(filename, root, verbose=True):
     """
-    Secure ZIP extraction with minimal behavioural changes.
+    Secure ZIP extraction using validate-then-extract.
 
-    - Prevents classic Zip-Slip (.., absolute paths, drive letters)
-    - Prevents writes through pre-existing symlinks
-    - Preserves original extraction behaviour for valid archives
+    All members are validated before any extraction occurs.  If any member
+    fails validation the entire archive is rejected and nothing is written
+    to disk.
+
+    Checks performed on every member name:
+    - Null-byte rejection (platform path-truncation vector)
+    - Zip-Slip (.., absolute paths, drive letters)
+    - Symlink-escape (writes through pre-existing symlinks)
+
+    All path comparisons use ``os.path.normcase`` so that the checks
+    are case-insensitive on Windows (no-op on POSIX).
+
+    Members are validated again immediately before each extraction as a
+    best-effort check against filesystem changes between Phase 1 and the
+    actual write, but this cannot eliminate TOCTOU races inherent in
+    non-atomic extraction.
+
+    Extraction aborts on the first error (including I/O errors) rather
+    than skipping individual members.  Partial extraction of a potentially
+    malicious archive is worse than no extraction.
     """
 
     if verbose:
@@ -2302,45 +2352,51 @@ def _unzip_iter(filename, root, verbose=True):
         zf = zipfile.ZipFile(filename)
     except Exception as e:
         yield ErrorMessage(filename, e)
+        # Flush the "Unzipping ..." line here because the try/finally that
+        # normally handles this is never entered (zf was never assigned).
+        if verbose:
+            print()
         return
 
-    # Canonical root
-    root_abs = os.path.abspath(root)
-    root_real = os.path.realpath(root_abs)
-    root_prefix = root_real.rstrip(os.sep) + os.sep
-
-    # Ensure the extraction root directory exists
-    os.makedirs(root, exist_ok=True)
-
     try:
-        for member in zf.namelist():
+        root_abs = os.path.abspath(root)
+        members = zf.namelist()
 
-            # Construct target path
-            raw_target = os.path.join(root_abs, member)
-            target_abs = os.path.abspath(raw_target)
-
-            # Zip-Slip check (absolute/traversal/drive-letter cases)
-            if not target_abs.startswith(root_prefix):
-                yield ErrorMessage(filename, f"Zip Slip blocked: {member}")
+        # Phase 1 -- validate every member before touching the filesystem.
+        has_violations = False
+        for member in members:
+            error = _validate_member(member, root_abs)
+            if error is not None:
+                yield ErrorMessage(filename, error)
+                has_violations = True
                 continue
 
-            # Symlink-escape check
-            target_real = os.path.realpath(target_abs)
-            if not target_real.startswith(root_prefix):
-                yield ErrorMessage(filename, f"Symlink escape blocked: {member}")
-                continue
+        if has_violations:
+            return
 
-            # Safe extraction
+        # Phase 2 -- all members passed; extract.
+        try:
+            os.makedirs(root_abs, exist_ok=True)
+        except Exception as e:
+            yield ErrorMessage(filename, f"Extraction error: {e}")
+            return
+
+        for member in members:
+            error = _validate_member(member, root_abs)
+            if error is not None:
+                yield ErrorMessage(filename, f"{error} (during extraction)")
+                return
             try:
-                zf.extract(member, root)
+                zf.extract(member, root_abs)
             except Exception as e:
                 yield ErrorMessage(filename, f"Extraction error for {member}: {e}")
-                continue
+                return
+    except Exception as e:
+        yield ErrorMessage(filename, f"Validation error: {e}")
     finally:
         zf.close()
-
-    if verbose:
-        print()
+        if verbose:
+            print()
 
 
 ######################################################################
@@ -2467,7 +2523,7 @@ def _svn_revision(filename):
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
-    (stdout, stderr) = p.communicate()
+    stdout, stderr = p.communicate()
     if p.returncode != 0 or stderr or not stdout:
         raise ValueError(
             "Error determining svn_revision for %s: %s"
@@ -2622,7 +2678,7 @@ if __name__ == "__main__":
         help="download server index url",
     )
 
-    (options, args) = parser.parse_args()
+    options, args = parser.parse_args()
 
     downloader = Downloader(server_index_url=options.server_index_url)
 

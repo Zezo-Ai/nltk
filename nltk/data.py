@@ -776,7 +776,7 @@ def restricted_pickle_load(string):
     """
     Prevents any class or function from loading.
     """
-    from nltk.app.wordnet_app import RestrictedUnpickler
+    from nltk.picklesec import RestrictedUnpickler
 
     return RestrictedUnpickler(BytesIO(string)).load()
 

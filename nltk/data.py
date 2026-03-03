@@ -384,7 +384,7 @@ class FileSystemPathPointer(PathPointer, str):
         path = os.path.normpath(self._path)
 
         # Block raw absolute reads such as "/" "C:\\Windows" etc.
-        if os.path.isabs(path) and path != os.path.normpath(self._path):
+        if os.path.isabs(path) and os.path.dirname(path) == path:
             raise ValueError(f"Direct absolute file access blocked: {path}")
 
         stream = open(self._path, "rb")

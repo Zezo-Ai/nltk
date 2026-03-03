@@ -2319,10 +2319,11 @@ def _unzip_iter(filename, root, verbose=True):
         return
 
     try:
-        root_abs = os.path.normcase(os.path.abspath(root))
-        root_real = os.path.normcase(os.path.realpath(root_abs))
-        abs_prefix = root_abs.rstrip(os.sep) + os.sep
-        real_prefix = root_real.rstrip(os.sep) + os.sep
+        root_abs = os.path.abspath(root)
+        root_real = os.path.realpath(root_abs)
+
+        abs_prefix = os.path.normcase(root_abs).rstrip(os.sep) + os.sep
+        real_prefix = os.path.normcase(root_real).rstrip(os.sep) + os.sep
 
         members = zf.namelist()
 
@@ -2336,7 +2337,9 @@ def _unzip_iter(filename, root, verbose=True):
             if not target_abs.startswith(abs_prefix):
                 return f"Zip Slip blocked: {member}"
 
-            target_real = os.path.normcase(os.path.realpath(target_abs))
+            target_real = os.path.normcase(
+                os.path.realpath(os.path.join(root_abs, member))
+            )
             if not target_real.startswith(real_prefix):
                 return f"Symlink escape blocked: {member}"
 

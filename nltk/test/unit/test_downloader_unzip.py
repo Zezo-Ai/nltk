@@ -166,7 +166,10 @@ class TestSecureUnzip:
         _make_zip(zip_path, members)
 
         extract_root.mkdir()
-        os.symlink(outside_dir, extract_root / "dir_link")
+        try:
+            os.symlink(outside_dir, extract_root / "dir_link")
+        except OSError:
+            pytest.skip("Symlink creation not permitted on this platform")
 
         messages = _run_unzip_iter(zip_path, extract_root, verbose=False)
 

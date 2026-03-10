@@ -2353,7 +2353,7 @@ class ColorizedList:
             else:
                 try:
                     del self._callbacks[e][func]
-                except Exception:
+                except KeyError:
                     pass
 
     # ////////////////////////////////////////////////////////////

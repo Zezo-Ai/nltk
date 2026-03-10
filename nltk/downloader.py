@@ -893,6 +893,7 @@ class Downloader:
                     "falling back to legacy MD5 verification. Consider updating your "
                     "NLTK data index (or re-running the downloader) to get SHA256 checksums.",
                     RuntimeWarning,
+                    stacklevel=2,
                 )
                 self._warned_missing_sha256_checksum = True
 

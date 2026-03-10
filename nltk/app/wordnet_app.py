@@ -48,6 +48,7 @@ Options::
 import base64
 import copy
 import getopt
+import html
 import io
 import os
 import pickle
@@ -132,11 +133,13 @@ class MyServerHandler(BaseHTTPRequestHandler):
             # This doesn't seem to work with MWEs.
             type = "text/html"
             parts = (sp.split("?")[1]).split("&")
-            word = [
-                p.split("=")[1].replace("+", " ")
-                for p in parts
-                if p.startswith("nextWord")
-            ][0]
+            word = html.escape(
+                [
+                    p.split("=")[1].replace("+", " ")
+                    for p in parts
+                    if p.startswith("nextWord")
+                ][0]
+            )
             page, word = page_from_word(word)
         elif sp.startswith("lookup_"):
             # TODO add a variation of this that takes a non ecoded word or MWE.

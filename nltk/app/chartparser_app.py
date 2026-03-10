@@ -1718,7 +1718,7 @@ class ChartView:
         else:
             try:
                 del self._callbacks[event][func]
-            except Exception:
+            except KeyError:
                 pass
 
     def _fire_callbacks(self, event, *args):

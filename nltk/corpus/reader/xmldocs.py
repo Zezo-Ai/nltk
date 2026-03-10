@@ -64,7 +64,7 @@ class XMLCorpusReader(CorpusReader):
         word_tokenizer = WordPunctTokenizer()
         try:
             iterator = elt.getiterator()
-        except Exception:
+        except AttributeError:
             iterator = elt.iter()
         out = []
 

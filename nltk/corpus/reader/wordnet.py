@@ -1949,7 +1949,7 @@ class WordNetCorpusReader(CorpusReader):
                     line = data_file.readline()
 
             # close the extra file handle we opened
-            except:
+            except Exception:
                 data_file.close()
                 raise
             else:
@@ -1978,7 +1978,7 @@ class WordNetCorpusReader(CorpusReader):
         try:
             with reader.open(file) as fp:
                 return fp.read()
-        except:
+        except Exception:
             if lang in self._lang_data:
                 return f"Cannot determine {file} for {lang}"
             else:

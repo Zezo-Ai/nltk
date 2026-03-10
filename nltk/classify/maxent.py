@@ -1111,8 +1111,6 @@ def train_maxent_classifier_with_gis(
 
     except KeyboardInterrupt:
         print("      Training stopped: keyboard interrupt")
-    except:
-        raise
 
     if trace > 2:
         ll = log_likelihood(classifier, train_toks)
@@ -1231,8 +1229,6 @@ def train_maxent_classifier_with_iis(
 
     except KeyboardInterrupt:
         print("      Training stopped: keyboard interrupt")
-    except:
-        raise
 
     if trace > 2:
         ll = log_likelihood(classifier, train_toks)

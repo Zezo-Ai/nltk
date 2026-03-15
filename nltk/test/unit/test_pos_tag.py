@@ -109,12 +109,13 @@ class TestPosTag(unittest.TestCase):
         Regression test for #2434: some environments crash when requesting universal
         tags for Russian due to an attempted lookup of ru-rnc-new.map, which is not
         shipped in the universal_tagset data package. Ensure the code works even
-        when that mapping file cannot be loaded, and ensure the mapping cache is
+        when that mapping file is missing, and ensure the mapping cache is
         not pre-initialized by previous tests.
         """
         from collections import defaultdict
 
         import nltk.tag.mapping as mapping
+        from nltk.data import normalize_resource_url
 
         text = "Илья оторопел и дважды перечитал бумажку."
         expected_tagged = [
@@ -134,23 +135,20 @@ class TestPosTag(unittest.TestCase):
                 lambda: defaultdict(lambda: defaultdict(lambda: "UNK"))
             )
 
-            real_load = mapping.load
-
-            def load_side_effect(resource, *args, **kwargs):
-                # Simulate the real missing-file scenario for ru-rnc-new.map only.
-                if str(resource).endswith("/ru-rnc-new.map"):
-                    raise LookupError(
-                        "ru-rnc-new.map not available in universal_tagset"
-                    )
-                return real_load(resource, *args, **kwargs)
-
-            with unittest.mock.patch.object(
-                mapping, "load", side_effect=load_side_effect
-            ):
-                assert (
-                    pos_tag(word_tokenize(text), tagset="universal", lang="rus")
-                    == expected_tagged
+            # In current published nltk_data, ru-rnc-new.map is not shipped.
+            # (We intentionally don't assert on the error message text here.)
+            with self.assertRaises(LookupError):
+                mapping.load(
+                    normalize_resource_url(
+                        "nltk:taggers/universal_tagset/ru-rnc-new.map"
+                    ),
+                    format="text",
                 )
+
+            assert (
+                pos_tag(word_tokenize(text), tagset="universal", lang="rus")
+                == expected_tagged
+            )
         finally:
             mapping._MAPPINGS = saved_mappings
 

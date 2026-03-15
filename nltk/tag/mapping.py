@@ -91,9 +91,16 @@ def tagset_mapping(source, target):
 
     if source not in _MAPPINGS or target not in _MAPPINGS[source]:
         if target == "universal":
-            _load_universal_map(source)
+            # Minimal fix: ru-rnc-new is embedded below, but _load_universal_map()
+            # will try to load taggers/universal_tagset/ru-rnc-new.map and can
+            # raise LookupError on installations where that file is absent.
+            if source != "ru-rnc-new":
+                _load_universal_map(source)
+
             # Added the new Russian National Corpus mappings because the
             # Russian model for nltk.pos_tag() uses it.
+            if "ru-rnc-new" not in _MAPPINGS:
+                _MAPPINGS["ru-rnc-new"] = {}
             _MAPPINGS["ru-rnc-new"]["universal"] = {
                 "A": "ADJ",
                 "A-PRO": "PRON",

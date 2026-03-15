@@ -91,35 +91,34 @@ def tagset_mapping(source, target):
 
     if source not in _MAPPINGS or target not in _MAPPINGS[source]:
         if target == "universal":
-            # Minimal fix: ru-rnc-new is embedded below, but _load_universal_map()
-            # will try to load taggers/universal_tagset/ru-rnc-new.map and can
-            # raise LookupError on installations where that file is absent.
-            if source != "ru-rnc-new":
+            if source == "ru-rnc-new":
+                # ru-rnc-new.map is not shipped in the universal_tagset data package,
+                # so avoid _load_universal_map("ru-rnc-new") and use the embedded mapping.
+                # Ensure unknown tags map to 'X' (same behavior as _load_universal_map()).
+                _MAPPINGS[source][target].default_factory = lambda: "X"
+                _MAPPINGS[source][target].update(
+                    {
+                        "A": "ADJ",
+                        "A-PRO": "PRON",
+                        "ADV": "ADV",
+                        "ADV-PRO": "PRON",
+                        "ANUM": "ADJ",
+                        "CONJ": "CONJ",
+                        "INTJ": "X",
+                        "NONLEX": ".",
+                        "NUM": "NUM",
+                        "PARENTH": "PRT",
+                        "PART": "PRT",
+                        "PR": "ADP",
+                        "PRAEDIC": "PRT",
+                        "PRAEDIC-PRO": "PRON",
+                        "S": "NOUN",
+                        "S-PRO": "PRON",
+                        "V": "VERB",
+                    }
+                )
+            else:
                 _load_universal_map(source)
-
-            # Added the new Russian National Corpus mappings because the
-            # Russian model for nltk.pos_tag() uses it.
-            if "ru-rnc-new" not in _MAPPINGS:
-                _MAPPINGS["ru-rnc-new"] = {}
-            _MAPPINGS["ru-rnc-new"]["universal"] = {
-                "A": "ADJ",
-                "A-PRO": "PRON",
-                "ADV": "ADV",
-                "ADV-PRO": "PRON",
-                "ANUM": "ADJ",
-                "CONJ": "CONJ",
-                "INTJ": "X",
-                "NONLEX": ".",
-                "NUM": "NUM",
-                "PARENTH": "PRT",
-                "PART": "PRT",
-                "PR": "ADP",
-                "PRAEDIC": "PRT",
-                "PRAEDIC-PRO": "PRON",
-                "S": "NOUN",
-                "S-PRO": "PRON",
-                "V": "VERB",
-            }
 
     return _MAPPINGS[source][target]
 

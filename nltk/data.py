@@ -646,6 +646,7 @@ def find(resource_name, paths=None):
                 return ZipFilePathPointer(path_, resource_name)
             except OSError:
                 # resource not in zipfile
+                _note_near_miss(path_)
                 continue
 
         # Is the path item a directory or is resource_name an absolute path?
@@ -661,8 +662,11 @@ def find(resource_name, paths=None):
                     # If the package exists (either as a directory or as a .zip)
                     # but the specific requested file doesn't, record a "near miss"
                     # so the eventual LookupError isn't misleading.
-                    parts = resource_name.split("/")
-                    if len(parts) > 1:
+                    parts = [p for p in resource_name.split("/") if p]
+                    # Only record a "near miss" when there is a sub-entry *within* a
+                    # package (i.e. more than two meaningful path components), so we
+                    # don't misclassify requests for the package root itself.
+                    if len(parts) > 2:
                         pkg = "/".join(parts[:2])  # e.g. "corpora/stopwords"
                         pkg_dir = os.path.join(path_, url2pathname(pkg))
                         pkg_zip = os.path.join(path_, url2pathname(pkg + ".zip"))

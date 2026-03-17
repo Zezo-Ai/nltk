@@ -4,10 +4,6 @@ Test Aline algorithm for aligning phonetic sequences
 
 from nltk.metrics import aline
 
-# ---------------------------------------------------------
-# Existing alignment tests
-# ---------------------------------------------------------
-
 
 def test_aline():
     result = aline.align("θin", "tenwis")
@@ -51,11 +47,6 @@ def test_aline_delta():
     """
     assert aline.delta("p", "q") == 20.0
     assert aline.delta("a", "A") == 0.0
-
-
-# ---------------------------------------------------------
-# Edge cases
-# ---------------------------------------------------------
 
 
 class TestAlineEdgeCases:
@@ -159,11 +150,6 @@ class TestFeatureMatrix:
                 ), f"Close-mid vowel {v!r} has high={aline.feature_matrix[v]['high']!r}"
 
 
-# ---------------------------------------------------------
-# Scoring functions
-# ---------------------------------------------------------
-
-
 class TestScoringFunctions:
     def test_delta_identical_consonants(self):
         """Identical consonants should have delta = 0."""
@@ -222,11 +208,6 @@ class TestScoringFunctions:
         assert isinstance(r_vowels, list)
         assert len(r_consonants) > 0
         assert len(r_vowels) > 0
-
-
-# ---------------------------------------------------------
-# Alignment symmetry and properties
-# ---------------------------------------------------------
 
 
 class TestAlignmentProperties:

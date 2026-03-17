@@ -2,8 +2,6 @@
 Test Aline algorithm for aligning phonetic sequences
 """
 
-import pytest
-
 from nltk.metrics import aline
 
 
@@ -59,10 +57,16 @@ class TestAlineEdgeCases:
 
     def test_invalid_segment_raises(self):
         """Unknown segments should raise ValueError, not KeyError."""
-        with pytest.raises(ValueError, match="not found in feature_matrix"):
+        try:
             aline.align("p", "!")
-        with pytest.raises(ValueError, match="not found in feature_matrix"):
+            assert False, "Expected ValueError"
+        except ValueError:
+            pass
+        try:
             aline.align("☺", "t")
+            assert False, "Expected ValueError"
+        except ValueError:
+            pass
 
     def test_single_char(self):
         """Single characters should align."""

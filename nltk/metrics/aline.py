@@ -1373,16 +1373,8 @@ def align(str1, str2, epsilon=0):
     assert 0.0 <= epsilon <= 1.0, "Epsilon must be between 0.0 and 1.0."
 
     # Validate that all input segments exist in the feature matrix
-    for i, char in enumerate(str1):
-        if char not in feature_matrix:
-            raise ValueError(
-                f"Segment '{char}' at position {i} in str1 not found in feature_matrix"
-            )
-    for i, char in enumerate(str2):
-        if char not in feature_matrix:
-            raise ValueError(
-                f"Segment '{char}' at position {i} in str2 not found in feature_matrix"
-            )
+    _validate_segments(str1, "str1")
+    _validate_segments(str2, "str2")
 
     m = len(str1)
     n = len(str2)
@@ -1472,6 +1464,15 @@ def _retrieve(i, j, s, S, T, str1, str2, out):
                 out,
             )
     return out
+
+
+def _validate_segments(seq, name):
+    """Validate that all segments in seq exist in the feature matrix."""
+    for i, char in enumerate(seq):
+        if char not in feature_matrix:
+            raise ValueError(
+                f"Segment '{char}' at position {i} in {name} not found in feature_matrix"
+            )
 
 
 def sigma_skip(p):

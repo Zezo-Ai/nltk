@@ -9,10 +9,6 @@ import warnings
 import zipfile
 from pathlib import Path
 from urllib.parse import unquote, urlparse
-from urllib.request import (
-    HTTPRedirectHandler,
-    build_opener,
-)
 from urllib.request import urlopen as _original_urlopen
 
 ENFORCE = False
@@ -180,14 +176,6 @@ def validate_network_url(url_input, context="NetworkIO"):
 # --- CENTRALIZED I/O WRAPPERS ---
 
 
-class SafeRedirectHandler(HTTPRedirectHandler):
-    """Redirect handler that re-validates each redirect target to enforce SSRF protections."""
-
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        validate_network_url(newurl, context="pathsec.urlopen[redirect]")
-        return super().redirect_request(req, fp, code, msg, headers, newurl)
-
-
 def open(
     file,
     mode="r",
@@ -214,9 +202,7 @@ def open(
 def urlopen(url, *args, **kwargs):
     url_string = url.full_url if hasattr(url, "full_url") else str(url)
     validate_network_url(url_string, context="pathsec.urlopen")
-
-    opener = build_opener(SafeRedirectHandler())
-    return opener.open(url, *args, **kwargs)
+    return _original_urlopen(url, *args, **kwargs)
 
 
 class ZipFile(zipfile.ZipFile):

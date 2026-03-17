@@ -378,19 +378,11 @@ class FileSystemPathPointer(PathPointer, str):
         """The absolute path identified by this path pointer."""
         return self._path
 
-    # ==============================
-    # SECURITY PATCH ENFORCING SANDBOX
-    # ==============================
     def open(self, encoding=None):
         """
-        Secure open — prevents absolute direct access outside pointer root.
+        Return a seekable read-only stream for the file identified by
+        this path pointer.  Path validation is handled by pathsec.open().
         """
-        path = os.path.normpath(self._path)
-
-        # Block raw absolute reads such as "/" "C:\\Windows" etc.
-        if os.path.isabs(path) and path != os.path.normpath(self._path):
-            raise ValueError(f"Direct absolute file access blocked: {path}")
-
         stream = _secure_open(self._path, "rb")
         if encoding is not None:
             stream = SeekableUnicodeStreamReader(stream, encoding)
@@ -1191,7 +1183,7 @@ class OpenOnDemandZipFile(ZipFile):
 
     def read(self, name):
         assert self.fp is None
-        self.fp = open(self.filename, "rb")
+        self.fp = _secure_open(self.filename, "rb")
         value = ZipFile.read(self, name)
         # Ensure that _fileRefCnt needs to be set for Python2and3 compatible code.
         # Since we only opened one file here, we add 1.

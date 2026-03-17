@@ -1658,7 +1658,7 @@ class PunktSentenceTokenizer(PunktBaseClass, TokenizerI):
             # orthogrpahic evidence about whether the next word
             # starts a sentence or not.
             is_sent_starter = self._ortho_heuristic(aug_tok2)
-            if is_sent_starter == True:
+            if is_sent_starter:
                 aug_tok1.sentbreak = True
                 return REASON_ABBR_WITH_ORTHOGRAPHIC_HEURISTIC
 
@@ -1679,7 +1679,7 @@ class PunktSentenceTokenizer(PunktBaseClass, TokenizerI):
             # starts a sentence or not.
             is_sent_starter = self._ortho_heuristic(aug_tok2)
 
-            if is_sent_starter == False:
+            if not is_sent_starter:
                 aug_tok1.sentbreak = False
                 aug_tok1.abbr = True
                 if tok_is_initial:

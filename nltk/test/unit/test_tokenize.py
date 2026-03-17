@@ -875,7 +875,7 @@ class TestTokenize:
     )
     def punkt_debug_decisions(self, input_text, n_sents, n_splits, lang_vars=None):
         tokenizer = punkt.PunktSentenceTokenizer()
-        if lang_vars != None:
+        if lang_vars is not None:
             tokenizer._lang_vars = lang_vars
 
         assert len(tokenizer.tokenize(input_text)) == n_sents

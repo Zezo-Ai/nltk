@@ -17,6 +17,7 @@ from collections import defaultdict
 
 from nltk.corpus.reader.util import concat
 from nltk.corpus.reader.xmldocs import ElementTree, XMLCorpusReader
+from nltk.pathsec import urlopen
 from nltk.util import LazyConcatenation, LazyMap, flatten
 
 # to resolve the namespace issue

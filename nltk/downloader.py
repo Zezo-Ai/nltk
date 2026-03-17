@@ -171,10 +171,10 @@ import warnings
 import zipfile
 from hashlib import md5, sha256
 from urllib.error import HTTPError, URLError
-from urllib.request import urlopen
 from xml.etree import ElementTree
 
 import nltk
+from nltk.pathsec import open, urlopen
 
 # urllib2 = nltk.internals.import_from_stdlib('urllib2')
 

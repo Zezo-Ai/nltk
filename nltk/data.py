@@ -44,7 +44,9 @@ from abc import ABCMeta, abstractmethod
 from gzip import WRITE as GZ_WRITE
 from gzip import GzipFile
 from io import BytesIO, TextIOWrapper
-from urllib.request import url2pathname, urlopen
+from urllib.request import url2pathname
+
+from nltk.pathsec import open, urlopen
 
 # Reject unsafe no-protocol paths: traversal segments, trailing '..', absolute paths,
 # backslashes, Windows drive letters. Use a raw-string pattern and do not anchor only

@@ -1,8 +1,9 @@
 import builtins
 import io
 import os
+import socket
 import zipfile
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 
 import pytest
 
@@ -59,10 +60,23 @@ def test_ssrf_cloud_metadata_link_local():
 
 
 def test_ssrf_ip_obfuscation():
-    """Will FAIL on PR #3520 because string-matching misses the decimal IP."""
+    """Will FAIL on PR #3520 (on Unix) because string-matching misses the decimal IP."""
     dl = Downloader(server_index_url="http://2852039166/latest/meta-data/")
-    with pytest.raises((ValueError, PermissionError, URLError)):
+    try:
         dl.index()
+        pytest.fail("Request succeeded entirely, bypassing all filters.")
+    except (ValueError, PermissionError):
+        # SUCCESS (Your Branch): Our sentinel proactively blocked the restricted IP.
+        pass
+    except HTTPError as e:
+        # FAILURE (PR #3520): The request bypassed local filters and hit the network layer!
+        pytest.fail(f"Vulnerability bypassed localized string filters: {e}")
+    except URLError as e:
+        # SUCCESS (Windows only): DNS resolution strictly fails on decimal IPs natively.
+        if isinstance(e.reason, socket.gaierror):
+            pass
+        else:
+            pytest.fail(f"Unexpected network failure: {e}")
 
 
 # --- PATH TRAVERSAL TESTS ---

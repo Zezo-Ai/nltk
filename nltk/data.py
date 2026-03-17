@@ -631,6 +631,13 @@ def find(resource_name, paths=None):
     else:
         zipfile = None
 
+    # Evidence that the *package* exists but the specific entry does not.
+    _package_present_but_entry_missing = []
+
+    def _note_near_miss(where):
+        if where not in _package_present_but_entry_missing:
+            _package_present_but_entry_missing.append(where)
+
     # Check each item in our path
     for path_ in paths:
         # Is the path item a zipfile?
@@ -639,6 +646,7 @@ def find(resource_name, paths=None):
                 return ZipFilePathPointer(path_, resource_name)
             except OSError:
                 # resource not in zipfile
+                _note_near_miss(path_)
                 continue
 
         # Is the path item a directory or is resource_name an absolute path?
@@ -650,6 +658,22 @@ def find(resource_name, paths=None):
                         return GzipFileSystemPathPointer(p)
                     else:
                         return FileSystemPathPointer(p)
+                else:
+                    # If the package exists (either as a directory or as a .zip)
+                    # but the specific requested file doesn't, record a "near miss"
+                    # so the eventual LookupError isn't misleading.
+                    parts = [p for p in resource_name.split("/") if p]
+                    # Only record a "near miss" when there is a sub-entry *within* a
+                    # package (i.e. more than two meaningful path components), so we
+                    # don't misclassify requests for the package root itself.
+                    if len(parts) > 2:
+                        pkg = "/".join(parts[:2])  # e.g. "corpora/stopwords"
+                        pkg_dir = os.path.join(path_, url2pathname(pkg))
+                        pkg_zip = os.path.join(path_, url2pathname(pkg + ".zip"))
+                        if os.path.isdir(pkg_dir):
+                            _note_near_miss(pkg_dir)
+                        elif os.path.isfile(pkg_zip):
+                            _note_near_miss(pkg_zip)
             else:
                 p = os.path.join(path_, url2pathname(zipfile))
                 if os.path.exists(p):
@@ -657,6 +681,7 @@ def find(resource_name, paths=None):
                         return ZipFilePathPointer(p, zipentry)
                     except OSError:
                         # resource not in zipfile
+                        _note_near_miss(p)
                         continue
 
     # Fallback: if the path doesn't include a zip file, then try
@@ -677,18 +702,37 @@ def find(resource_name, paths=None):
     if resource_zipname.endswith(".zip"):
         resource_zipname = resource_zipname.rpartition(".")[0]
 
-    # Display a friendly error message if the resource wasn't found:
-    msg = (
-        f"Resource '{resource_zipname}' not found.\n"
-        "Please use the NLTK Downloader to obtain the resource:\n\n"
-        ">>> import nltk\n"
-        f">>> nltk.download('{resource_zipname}')\n"
-    )
+    # Display a friendly error message if the resource wasn't found.
+    # If the package appears present but the specific entry is missing, keep
+    # the download hint as a secondary suggestion.
+    if _package_present_but_entry_missing:
+        msg = (
+            f"Resource entry '{resource_name}' not found in installed package "
+            f"'{resource_zipname}'.\n"
+            "The package appears to be installed, but the requested file is missing.\n"
+            "\n"
+            "If you believe the package is corrupted or out of date, you can try "
+            "re-downloading it with the NLTK Downloader:\n\n"
+            ">>> import nltk\n"
+            f">>> nltk.download('{resource_zipname}')\n"
+        )
+    else:
+        msg = (
+            f"Resource '{resource_zipname}' not found.\n"
+            "Please use the NLTK Downloader to obtain the resource:\n\n"
+            ">>> import nltk\n"
+            f">>> nltk.download('{resource_zipname}')\n"
+        )
     msg = textwrap_indent(msg)
 
     msg += "\n  For more information see: https://www.nltk.org/data.html\n"
 
     msg += f"\n  Attempted to load '{resource_name}'\n"
+
+    if _package_present_but_entry_missing:
+        msg += "\n  Package was found in:" + "".join(
+            "\n    - %r" % d for d in _package_present_but_entry_missing
+        )
 
     msg += "\n  Searched in:" + "".join("\n    - %r" % d for d in paths)
     sep = "*" * 70

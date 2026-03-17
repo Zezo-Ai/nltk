@@ -4,14 +4,6 @@ Test Aline algorithm for aligning phonetic sequences
 
 from nltk.metrics import aline
 
-# Derive vowel/consonant lists from the feature_matrix for testing
-_VOWELS_IN_MATRIX = [
-    k for k, v in aline.feature_matrix.items() if v.get("place") == "vowel"
-]
-_CONSONANTS_IN_MATRIX = [
-    k for k, v in aline.feature_matrix.items() if v.get("place") != "vowel"
-]
-
 # ---------------------------------------------------------
 # Existing alignment tests
 # ---------------------------------------------------------
@@ -105,7 +97,7 @@ class TestFeatureMatrix:
 
     def test_all_vowels_in_feature_matrix(self):
         """Every vowel (place='vowel' entry) should be a valid key."""
-        for v in _VOWELS_IN_MATRIX:
+        for v in aline.vowels:
             assert v in aline.feature_matrix, f"Vowel {v!r} missing from feature_matrix"
 
     def test_no_trailing_spaces_in_consonants(self):
@@ -115,7 +107,7 @@ class TestFeatureMatrix:
 
     def test_no_trailing_spaces_in_vowels(self):
         """No vowel entry should have trailing whitespace."""
-        for v in _VOWELS_IN_MATRIX:
+        for v in aline.vowels:
             assert v == v.strip(), f"Vowel {v!r} has trailing whitespace"
 
     def test_no_trailing_spaces_in_feature_matrix_keys(self):
@@ -132,7 +124,7 @@ class TestFeatureMatrix:
 
     def test_vowels_have_vowel_place(self):
         """All vowels in feature_matrix should have place='vowel'."""
-        for v in _VOWELS_IN_MATRIX:
+        for v in aline.vowels:
             assert (
                 aline.feature_matrix[v]["place"] == "vowel"
             ), f"Vowel {v!r} has place={aline.feature_matrix[v]['place']!r}"

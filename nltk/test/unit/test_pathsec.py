@@ -61,7 +61,6 @@ def test_ssrf_cloud_metadata_link_local():
 def test_ssrf_ip_obfuscation():
     """Will FAIL on PR #3520 because string-matching misses the decimal IP."""
     dl = Downloader(server_index_url="http://2852039166/latest/meta-data/")
-    # Added URLError to account for Windows DNS resolution failure
     with pytest.raises((ValueError, PermissionError, URLError)):
         dl.index()
 
@@ -94,7 +93,7 @@ def create_malicious_zip(filename):
     return mem_zip
 
 
-def test_zip_slip_traversal():
+def test_zip_slip_traversal(tmp_path):
     """
     Test standard ../ Zip-Slip traversal.
     Will FAIL on PR #3520 because standard zipfile silently sanitizes/ignores
@@ -106,10 +105,10 @@ def test_zip_slip_traversal():
     malicious_zip = create_malicious_zip("../../../evil.sh")
     with pytest.raises((ValueError, PermissionError)):
         with TargetZipFile(malicious_zip, "r") as zf:
-            zf.extractall("/tmp/nltk_extract")
+            zf.extractall(tmp_path)
 
 
-def test_zip_slip_absolute_path():
+def test_zip_slip_absolute_path(tmp_path):
     """
     Test Zip-Slip using an absolute path.
     Will FAIL on PR #3520 because standard zipfile silently ignores the absolute
@@ -120,4 +119,4 @@ def test_zip_slip_absolute_path():
     malicious_zip = create_malicious_zip("/etc/cron.d/evil_cron")
     with pytest.raises((ValueError, PermissionError)):
         with TargetZipFile(malicious_zip, "r") as zf:
-            zf.extractall("/tmp/nltk_extract")
+            zf.extractall(tmp_path)

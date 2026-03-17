@@ -17,7 +17,6 @@ from itertools import chain
 
 from nltk.corpus.reader.util import *
 from nltk.data import FileSystemPathPointer, PathPointer, ZipFilePathPointer
-from nltk.pathsec import open
 
 
 class CorpusReader:

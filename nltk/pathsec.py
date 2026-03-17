@@ -4,6 +4,7 @@ import builtins
 import ipaddress
 import os
 import socket
+import sys
 import warnings
 import zipfile
 from pathlib import Path
@@ -11,15 +12,20 @@ from urllib.parse import unquote, urlparse
 from urllib.request import urlopen as _original_urlopen
 
 ENFORCE = False
-_ALLOWED_CACHE = None
 
 
 def _get_allowed_roots():
-    global _ALLOWED_CACHE
-    if _ALLOWED_CACHE is not None:
-        return _ALLOWED_CACHE
-
     roots = set()
+
+    # 1. Dynamic check of runtime NLTK data paths
+    if "nltk.data" in sys.modules:
+        for p in getattr(sys.modules["nltk.data"], "path", []):
+            try:
+                roots.add(Path(p).resolve())
+            except Exception:
+                continue
+
+    # 2. Environment variables
     for p in os.environ.get("NLTK_DATA", "").split(os.pathsep):
         if p:
             try:
@@ -27,6 +33,7 @@ def _get_allowed_roots():
             except Exception:
                 continue
 
+    # 3. Standard locations
     standard_locs = [
         "~/nltk_data",
         "/usr/share/nltk_data",
@@ -41,6 +48,7 @@ def _get_allowed_roots():
         except Exception:
             continue
 
+    # 4. System temp dir
     import tempfile
 
     try:
@@ -48,12 +56,12 @@ def _get_allowed_roots():
     except Exception:
         pass
 
-    _ALLOWED_CACHE = roots
     return roots
 
 
 def validate_path(path_input, context="NLTK"):
-    if not path_input or not str(path_input).strip():
+    # Short-circuit for integer file descriptors (e.g., open(3))
+    if isinstance(path_input, int) or not path_input or not str(path_input).strip():
         return
 
     try:
@@ -63,7 +71,7 @@ def validate_path(path_input, context="NLTK"):
             if parsed.scheme == "file":
                 raw = unquote(parsed.path)
             else:
-                return  # Network URLs are handled by validate_network_url
+                return
 
         lower_raw = raw.lower()
         if ".zip" in lower_raw:
@@ -93,7 +101,9 @@ def validate_zip_archive(zip_obj_or_path, target_root, context="ZipAudit"):
                 if "\0" in name:
                     raise ValueError(f"Null byte in ZIP member: {name}")
                 member_path = (target / name).resolve()
-                if not str(member_path).startswith(str(target)):
+
+                # Path-aware containment check prevents prefix-confusion
+                if not (member_path == target or target in member_path.parents):
                     msg = f"Security Violation [{context}]: Traversal member '{name}' detected."
                     if ENFORCE:
                         raise PermissionError(msg)
@@ -117,8 +127,6 @@ def validate_network_url(url_input, context="NetworkIO"):
 
     try:
         parsed = urlparse(str(url_input))
-
-        # 1. Scheme Enforcement
         if parsed.scheme not in ("http", "https"):
             msg = f"Security Violation [{context}]: Invalid scheme '{parsed.scheme}'. Only http/https allowed."
             if ENFORCE:
@@ -131,20 +139,21 @@ def validate_network_url(url_input, context="NetworkIO"):
         if not hostname:
             return
 
-        # 2. DNS Resolution
+        # Use getaddrinfo to capture both IPv4 and IPv6 resolutions
         try:
-            ip_str = socket.gethostbyname(hostname)
-            ip_obj = ipaddress.ip_address(ip_str)
-        except socket.gaierror:
-            return
+            addr_info = socket.getaddrinfo(hostname, None)
+            for result in addr_info:
+                ip_str = result[4][0]
+                ip_obj = ipaddress.ip_address(ip_str)
 
-        # 3. Targeted IP Blacklisting
-        if ip_obj.is_loopback or ip_obj.is_link_local or ip_obj.is_multicast:
-            msg = f"Security Violation [{context}]: Blocked SSRF attempt to restricted IP {ip_str} ({hostname})"
-            if ENFORCE:
-                raise PermissionError(msg)
-            else:
-                warnings.warn(msg, RuntimeWarning, stacklevel=3)
+                if ip_obj.is_loopback or ip_obj.is_link_local or ip_obj.is_multicast:
+                    msg = f"Security Violation [{context}]: Blocked SSRF attempt to restricted IP {ip_str} ({hostname})"
+                    if ENFORCE:
+                        raise PermissionError(msg)
+                    else:
+                        warnings.warn(msg, RuntimeWarning, stacklevel=3)
+        except (socket.gaierror, ValueError):
+            pass
 
     except Exception:
         if ENFORCE:
@@ -164,10 +173,6 @@ def open(
     closefd=True,
     opener=None,
 ):
-    """
-    Intercepts built-in open() to enforce filesystem security boundaries.
-    Acts as a centralized guard against path traversal just before disk access.
-    """
     validate_path(file, context="pathsec.open")
     return builtins.open(
         file,
@@ -182,19 +187,12 @@ def open(
 
 
 def urlopen(url, *args, **kwargs):
-    """
-    Intercepts network requests to enforce SSRF protection.
-    """
     url_string = url.full_url if hasattr(url, "full_url") else str(url)
     validate_network_url(url_string, context="pathsec.urlopen")
     return _original_urlopen(url, *args, **kwargs)
 
 
 class ZipFile(zipfile.ZipFile):
-    """
-    Intercepts ZipFile extraction to enforce Zip-Slip security boundaries.
-    """
-
     def extractall(self, path=None, members=None, pwd=None):
         target = path if path is not None else os.getcwd()
         validate_zip_archive(self, target, context="pathsec.ZipFile.extractall")

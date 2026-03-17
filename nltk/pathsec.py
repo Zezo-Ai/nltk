@@ -1,3 +1,5 @@
+"""Centralized I/O security sentinel for NLTK."""
+
 import builtins
 import ipaddress
 import os
@@ -82,14 +84,14 @@ def validate_path(path_input, context="NLTK"):
             raise
 
 
-def validate_zip_archive(zip_input, target_root, context="ZipAudit"):
+def validate_zip_archive(zip_obj_or_path, target_root, context="ZipAudit"):
     try:
         target = Path(target_root).resolve()
-        with zipfile.ZipFile(zip_input, "r") as zf:
+
+        def _audit(zf):
             for name in zf.namelist():
                 if "\0" in name:
                     raise ValueError(f"Null byte in ZIP member: {name}")
-
                 member_path = (target / name).resolve()
                 if not str(member_path).startswith(str(target)):
                     msg = f"Security Violation [{context}]: Traversal member '{name}' detected."
@@ -97,6 +99,12 @@ def validate_zip_archive(zip_input, target_root, context="ZipAudit"):
                         raise PermissionError(msg)
                     else:
                         warnings.warn(msg, RuntimeWarning, stacklevel=3)
+
+        if isinstance(zip_obj_or_path, zipfile.ZipFile):
+            _audit(zip_obj_or_path)
+        else:
+            with zipfile.ZipFile(zip_obj_or_path, "r") as zf:
+                _audit(zf)
     except Exception:
         if ENFORCE:
             raise
@@ -180,3 +188,19 @@ def urlopen(url, *args, **kwargs):
     url_string = url.full_url if hasattr(url, "full_url") else str(url)
     validate_network_url(url_string, context="pathsec.urlopen")
     return _original_urlopen(url, *args, **kwargs)
+
+
+class ZipFile(zipfile.ZipFile):
+    """
+    Intercepts ZipFile extraction to enforce Zip-Slip security boundaries.
+    """
+
+    def extractall(self, path=None, members=None, pwd=None):
+        target = path if path is not None else os.getcwd()
+        validate_zip_archive(self, target, context="pathsec.ZipFile.extractall")
+        super().extractall(path, members, pwd)
+
+    def extract(self, member, path=None, pwd=None):
+        target = path if path is not None else os.getcwd()
+        validate_zip_archive(self, target, context="pathsec.ZipFile.extract")
+        return super().extract(member, path, pwd)

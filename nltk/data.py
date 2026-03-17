@@ -46,7 +46,7 @@ from gzip import GzipFile
 from io import BytesIO, TextIOWrapper
 from urllib.request import url2pathname
 
-from nltk.pathsec import open, urlopen
+from nltk.pathsec import ZipFile, open, urlopen
 
 # Reject unsafe no-protocol paths: traversal segments, trailing '..', absolute paths,
 # backslashes, Windows drive letters. Use a raw-string pattern and do not anchor only
@@ -501,7 +501,7 @@ class ZipFilePathPointer(PathPointer):
     @property
     def zipfile(self):
         """
-        The zipfile.ZipFile object used to access the zip file
+        The ZipFile object used to access the zip file
         containing the entry identified by this path pointer.
         """
         return self._zipfile
@@ -1166,9 +1166,9 @@ class LazyLoader:
 ######################################################################
 
 
-class OpenOnDemandZipFile(zipfile.ZipFile):
+class OpenOnDemandZipFile(ZipFile):
     """
-    A subclass of ``zipfile.ZipFile`` that closes its file pointer
+    A subclass of ``ZipFile`` that closes its file pointer
     whenever it is not using it; and re-opens it when it needs to read
     data from the zipfile.  This is useful for reducing the number of
     open file handles when many zip files are being accessed at once.
@@ -1180,7 +1180,7 @@ class OpenOnDemandZipFile(zipfile.ZipFile):
     def __init__(self, filename):
         if not isinstance(filename, str):
             raise TypeError("ReopenableZipFile filename must be a string")
-        zipfile.ZipFile.__init__(self, filename)
+        ZipFile.__init__(self, filename)
         assert self.filename == filename
         self.close()
         # After closing a ZipFile object, the _fileRefCnt needs to be cleared
@@ -1190,7 +1190,7 @@ class OpenOnDemandZipFile(zipfile.ZipFile):
     def read(self, name):
         assert self.fp is None
         self.fp = open(self.filename, "rb")
-        value = zipfile.ZipFile.read(self, name)
+        value = ZipFile.read(self, name)
         # Ensure that _fileRefCnt needs to be set for Python2and3 compatible code.
         # Since we only opened one file here, we add 1.
         self._fileRefCnt += 1

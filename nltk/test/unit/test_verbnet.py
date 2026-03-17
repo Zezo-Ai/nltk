@@ -8,12 +8,24 @@ import unittest
 
 import pytest
 
+import nltk.data
 from nltk.corpus.reader.verbnet import VerbnetCorpusReader
 
-# ---------------------------------------------------------------------------
+# ---------------------------------------------------------
 # Paths – tests that require a local corpus are skipped when absent.
-# ---------------------------------------------------------------------------
-_VN21_ROOT = os.path.join(os.path.expanduser("~"), "nltk_data", "corpora", "verbnet")
+# ---------------------------------------------------------
+
+
+def _find_verbnet_in_nltk_data():
+    """Search nltk.data.path for the verbnet corpus directory."""
+    for search_dir in nltk.data.path:
+        candidate = os.path.join(search_dir, "corpora", "verbnet")
+        if os.path.isdir(candidate):
+            return candidate
+    return None
+
+
+_VN21_ROOT = _find_verbnet_in_nltk_data()
 _VN32_ROOT = os.path.join(os.path.expanduser("~"), "Downloads", "verbnet")
 _VN33_ROOT = os.path.join(os.path.expanduser("~"), "verbnet3.3")
 
@@ -21,12 +33,16 @@ _FILEIDS = r"(?!\.).*\.xml"
 
 
 def _corpus_available(path):
-    return os.path.isdir(path) and any(f.endswith(".xml") for f in os.listdir(path))
+    return (
+        path is not None
+        and os.path.isdir(path)
+        and any(f.endswith(".xml") for f in os.listdir(path))
+    )
 
 
-# ---------------------------------------------------------------------------
+# ---------------------------------------------------------
 # Regex unit tests (no corpus required)
-# ---------------------------------------------------------------------------
+# ---------------------------------------------------------
 class TestRegexPatterns(unittest.TestCase):
     """Test _LONGID_RE and _SHORTID_RE directly."""
 
@@ -67,10 +83,10 @@ class TestRegexPatterns(unittest.TestCase):
         assert self.shortid_re.match("confess-37.10") is None
 
 
-# ---------------------------------------------------------------------------
+# ---------------------------------------------------------
 # Hardcoded entry tests – real examples from each VerbNet version, tested
 # against the regex without loading corpus files.
-# ---------------------------------------------------------------------------
+# ---------------------------------------------------------
 class TestRealEntries(unittest.TestCase):
     """Test longid/shortid regex matching against real entries from each version.
 
@@ -184,9 +200,9 @@ class TestRealEntries(unittest.TestCase):
         )
 
 
-# ---------------------------------------------------------------------------
+# ---------------------------------------------------------
 # Version parameter tests (no corpus required)
-# ---------------------------------------------------------------------------
+# ---------------------------------------------------------
 class TestVersionParameter(unittest.TestCase):
     def test_supported_versions(self):
         assert "2.1" in VerbnetCorpusReader.SUPPORTED_VERSIONS
@@ -198,9 +214,9 @@ class TestVersionParameter(unittest.TestCase):
             VerbnetCorpusReader("/tmp", ".*", version="4.0")
 
 
-# ---------------------------------------------------------------------------
+# ---------------------------------------------------------
 # Corpus-level integration tests
-# ---------------------------------------------------------------------------
+# ---------------------------------------------------------
 def _make_corpus_tests(version, root):
     """Factory that returns a test class for a specific VerbNet version."""
 
@@ -291,9 +307,9 @@ TestVerbNet32 = _make_corpus_tests("3.2", _VN32_ROOT)
 TestVerbNet33 = _make_corpus_tests("3.3", _VN33_ROOT)
 
 
-# ---------------------------------------------------------------------------
+# ---------------------------------------------------------
 # Bug-specific regression tests (require VerbNet 3.3)
-# ---------------------------------------------------------------------------
+# ---------------------------------------------------------
 @unittest.skipUnless(
     _corpus_available(_VN33_ROOT), f"VerbNet 3.3 not found at {_VN33_ROOT}"
 )

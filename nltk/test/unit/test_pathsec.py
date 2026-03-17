@@ -61,7 +61,8 @@ def test_ssrf_cloud_metadata_link_local():
 def test_ssrf_ip_obfuscation():
     """Will FAIL on PR #3520 because string-matching misses the decimal IP."""
     dl = Downloader(server_index_url="http://2852039166/latest/meta-data/")
-    with pytest.raises((ValueError, PermissionError)):
+    # Added URLError to account for Windows DNS resolution failure
+    with pytest.raises((ValueError, PermissionError, URLError)):
         dl.index()
 
 

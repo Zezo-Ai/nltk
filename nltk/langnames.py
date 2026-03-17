@@ -153,8 +153,14 @@ def q2name(qcode, typ="full"):
 
     >>> q2name('Q4289225', "short")
     'Low German'
+
+    >>> print(q2name('Q0000000'))
+    None
     """
-    return langname(q2tag(qcode), typ)
+    tag = q2tag(qcode)
+    if tag is None:
+        return None
+    return langname(tag, typ)
 
 
 def lang2q(name):
@@ -163,8 +169,14 @@ def lang2q(name):
 
     >>> lang2q('Low German')
     'Q25433'
+
+    >>> print(lang2q('NonexistentLanguage'))
+    None
     """
-    return tag2q(langcode(name))
+    code = langcode(name)
+    if code is None:
+        return None
+    return tag2q(code)
 
 
 # ======================================================================

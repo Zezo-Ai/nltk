@@ -174,7 +174,7 @@ from urllib.error import HTTPError, URLError
 from xml.etree import ElementTree
 
 import nltk
-from nltk.pathsec import ZipFile, open, urlopen
+from nltk.pathsec import ZipFile, urlopen
 
 # urllib2 = nltk.internals.import_from_stdlib('urllib2')
 

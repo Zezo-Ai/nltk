@@ -9,6 +9,10 @@ import warnings
 import zipfile
 from pathlib import Path
 from urllib.parse import unquote, urlparse
+from urllib.request import (
+    HTTPRedirectHandler,
+    build_opener,
+)
 from urllib.request import urlopen as _original_urlopen
 
 ENFORCE = False
@@ -65,13 +69,20 @@ def validate_path(path_input, context="NLTK"):
         return
 
     try:
-        raw = str(path_input.path if hasattr(path_input, "path") else path_input)
+        raw_source = path_input.path if hasattr(path_input, "path") else path_input
+        try:
+            raw = os.fspath(raw_source)
+        except TypeError:
+            raw = str(raw_source)
+
         if "://" in raw:
             parsed = urlparse(raw)
-            if parsed.scheme == "file":
-                raw = unquote(parsed.path)
-            else:
+            # Network URLs handled elsewhere; allow valid URL schemes to bypass path checks
+            if parsed.scheme in ("http", "https", "ftp"):
                 return
+            elif parsed.scheme == "file":
+                raw = unquote(parsed.path)
+            # Windows drive letters (C://) will fall through to normal path validation
 
         lower_raw = raw.lower()
         if ".zip" in lower_raw:
@@ -146,7 +157,13 @@ def validate_network_url(url_input, context="NetworkIO"):
                 ip_str = result[4][0]
                 ip_obj = ipaddress.ip_address(ip_str)
 
-                if ip_obj.is_loopback or ip_obj.is_link_local or ip_obj.is_multicast:
+                # Block loopback, link-local, multicast, and private ranges
+                if (
+                    ip_obj.is_loopback
+                    or ip_obj.is_link_local
+                    or ip_obj.is_multicast
+                    or ip_obj.is_private
+                ):
                     msg = f"Security Violation [{context}]: Blocked SSRF attempt to restricted IP {ip_str} ({hostname})"
                     if ENFORCE:
                         raise PermissionError(msg)
@@ -161,6 +178,14 @@ def validate_network_url(url_input, context="NetworkIO"):
 
 
 # --- CENTRALIZED I/O WRAPPERS ---
+
+
+class SafeRedirectHandler(HTTPRedirectHandler):
+    """Redirect handler that re-validates each redirect target to enforce SSRF protections."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        validate_network_url(newurl, context="pathsec.urlopen[redirect]")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
 def open(
@@ -189,7 +214,9 @@ def open(
 def urlopen(url, *args, **kwargs):
     url_string = url.full_url if hasattr(url, "full_url") else str(url)
     validate_network_url(url_string, context="pathsec.urlopen")
-    return _original_urlopen(url, *args, **kwargs)
+
+    opener = build_opener(SafeRedirectHandler())
+    return opener.open(url, *args, **kwargs)
 
 
 class ZipFile(zipfile.ZipFile):

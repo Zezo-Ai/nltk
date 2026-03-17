@@ -85,10 +85,13 @@ def test_ssrf_ip_obfuscation():
 def test_path_traversal_absolute():
     """
     Test if absolute paths bypass standard relative traversal checks.
-    Will FAIL on PR #3520 because standard builtins.open does not check path boundaries.
+    Will FAIL on vulnerable branches because standard builtins.open does not check path boundaries.
     """
-    # Dynamically grab the 'open' function NLTK's downloader is currently using
-    target_open = getattr(nltk.downloader, "open", builtins.open)
+    try:
+        from nltk.pathsec import open as target_open
+    except ImportError:
+        # On vulnerable branches without pathsec, default to standard open
+        target_open = builtins.open
 
     with pytest.raises((ValueError, PermissionError)):
         target_open("/etc/passwd", "r")

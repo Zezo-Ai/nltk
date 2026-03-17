@@ -46,7 +46,9 @@ from gzip import GzipFile
 from io import BytesIO, TextIOWrapper
 from urllib.request import url2pathname
 
-from nltk.pathsec import ZipFile, open, urlopen
+from nltk.pathsec import ZipFile
+from nltk.pathsec import open as _secure_open
+from nltk.pathsec import urlopen
 
 # Reject unsafe no-protocol paths: traversal segments, trailing '..', absolute paths,
 # backslashes, Windows drive letters. Use a raw-string pattern and do not anchor only
@@ -389,7 +391,7 @@ class FileSystemPathPointer(PathPointer, str):
         if os.path.isabs(path) and path != os.path.normpath(self._path):
             raise ValueError(f"Direct absolute file access blocked: {path}")
 
-        stream = open(self._path, "rb")
+        stream = _secure_open(self._path, "rb")
         if encoding is not None:
             stream = SeekableUnicodeStreamReader(stream, encoding)
         return stream

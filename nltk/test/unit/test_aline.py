@@ -103,10 +103,20 @@ class TestFeatureMatrix:
                 c in aline.feature_matrix
             ), f"Consonant {c!r} missing from feature_matrix"
 
+    def test_all_vowels_in_feature_matrix(self):
+        """Every vowel (place='vowel' entry) should be a valid key."""
+        for v in _VOWELS_IN_MATRIX:
+            assert v in aline.feature_matrix, f"Vowel {v!r} missing from feature_matrix"
+
     def test_no_trailing_spaces_in_consonants(self):
         """No consonant entry should have trailing whitespace."""
         for c in aline.consonants:
             assert c == c.strip(), f"Consonant {c!r} has trailing whitespace"
+
+    def test_no_trailing_spaces_in_vowels(self):
+        """No vowel entry should have trailing whitespace."""
+        for v in _VOWELS_IN_MATRIX:
+            assert v == v.strip(), f"Vowel {v!r} has trailing whitespace"
 
     def test_no_trailing_spaces_in_feature_matrix_keys(self):
         """No feature_matrix key should have trailing whitespace."""

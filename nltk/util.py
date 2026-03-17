@@ -15,6 +15,7 @@ import unicodedata
 import warnings
 from collections import defaultdict, deque
 from itertools import chain, combinations, islice, tee
+from pathlib import Path
 from pprint import pprint
 from urllib.request import (
     HTTPPasswordMgrWithDefaultRealm,
@@ -217,32 +218,35 @@ def re_show(regexp, string, left="{", right="}"):
 
 
 # recipe from David Mertz
-def filestring(f, allowed_dir=None):
+def filestring(f, encoding=None, allowed_dir=None):
     """
-    Read a file path or file-like object into a string.
-
-    Security (opt-in):
-    - If `allowed_dir` is provided, enforce sandbox restrictions:
-        * Resolve realpath()
-        * Prevent ../ traversal
-        * Prevent symlink escape
-    - If `allowed_dir` is None, old behavior is preserved (for backward compatibility).
-
-    Notes:
-    - File-like objects (`.read()`) are always allowed.
-    - TOCTOU race conditions cannot be fully eliminated if an attacker can modify
-      the filesystem concurrently, though realpath() and commonpath() reduce common bypasses.
+    Safely load a file into a string.
+    If allowed_dir is provided, it prevents path traversal and symlink escapes.
     """
     if hasattr(f, "read"):
         return f.read()
     elif isinstance(f, str):
-        if allowed_dir is None:
-            # LEGACY READ: Do not sandbox. Use standard builtin open.
-            with open(f) as infile:
+        # 1. Native, robust local sandbox check
+        if allowed_dir is not None:
+            target_path = Path(f).resolve()
+            safe_root = Path(allowed_dir).resolve()
+
+            # Path-aware containment prevents symlink escapes and traversal
+            if not (target_path == safe_root or safe_root in target_path.parents):
+                raise PermissionError(
+                    f"Path traversal attempt blocked: {target_path} is outside {safe_root}"
+                )
+
+        # 2. Read logic with encoding fallback to match NLTK expectations
+        try:
+            with open(f, encoding=encoding) as infile:
                 return infile.read()
-        else:
-            # SECURE READ: Use the pathsec sentinel.
-            with _secure_open(f, "r") as infile:
+        except UnicodeDecodeError:
+            # If a specific encoding was requested and failed, let it raise.
+            # Otherwise, fall back to latin-1 to avoid the crash.
+            if encoding is not None:
+                raise
+            with open(f, encoding="latin-1") as infile:
                 return infile.read()
     else:
         raise ValueError("Must be called with a filename or file-like object")

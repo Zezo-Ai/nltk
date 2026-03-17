@@ -20,19 +20,20 @@ from urllib.request import urlopen as _original_urlopen
 
 ENFORCE = False
 
+# Cache for static roots (standard locations, env vars, temp dir) that
+# don't change at runtime.  Computed once on first access.
+_static_roots_cache = None
 
-def _get_allowed_roots():
+
+def _get_static_roots():
+    """Return cached static allowed roots (env vars, standard locations, tempdir)."""
+    global _static_roots_cache
+    if _static_roots_cache is not None:
+        return _static_roots_cache
+
     roots = set()
 
-    # 1. Dynamic check of runtime NLTK data paths
-    if "nltk.data" in sys.modules:
-        for p in getattr(sys.modules["nltk.data"], "path", []):
-            try:
-                roots.add(Path(p).resolve())
-            except Exception:
-                continue
-
-    # 2. Environment variables
+    # 1. Environment variables
     for p in os.environ.get("NLTK_DATA", "").split(os.pathsep):
         if p:
             try:
@@ -40,12 +41,12 @@ def _get_allowed_roots():
             except Exception:
                 continue
 
-    # 3. Standard locations
+    # 2. Standard NLTK data locations (NOT cwd — an attacker who controls
+    #    the working directory could bypass all path checks)
     standard_locs = [
         "~/nltk_data",
         "/usr/share/nltk_data",
         "/usr/lib/nltk_data",
-        os.getcwd(),
     ]
     for loc in standard_locs:
         try:
@@ -55,13 +56,35 @@ def _get_allowed_roots():
         except Exception:
             continue
 
-    # 4. System temp dir
+    # 3. System temp dir
     import tempfile
 
     try:
         roots.add(Path(tempfile.gettempdir()).resolve())
     except Exception:
         pass
+
+    _static_roots_cache = roots
+    return roots
+
+
+def _get_allowed_roots():
+    """Return the full set of allowed root directories.
+
+    Static roots (env vars, standard locations, tempdir) are cached.
+    Dynamic roots from ``nltk.data.path`` are always checked fresh
+    since users can modify ``nltk.data.path`` at runtime.
+    """
+    roots = set(_get_static_roots())
+
+    # Always read nltk.data.path dynamically — it's a mutable list
+    # that users modify at runtime via nltk.data.path.append()
+    if "nltk.data" in sys.modules:
+        for p in getattr(sys.modules["nltk.data"], "path", []):
+            try:
+                roots.add(Path(p).resolve())
+            except Exception:
+                continue
 
     return roots
 

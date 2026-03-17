@@ -1371,6 +1371,19 @@ def align(str1, str2, epsilon=0):
         raise ImportError("You need numpy in order to use the align function")
 
     assert 0.0 <= epsilon <= 1.0, "Epsilon must be between 0.0 and 1.0."
+
+    # Validate that all input segments exist in the feature matrix
+    for i, char in enumerate(str1):
+        if char not in feature_matrix:
+            raise ValueError(
+                f"Segment '{char}' at position {i} in str1 not found in feature_matrix"
+            )
+    for i, char in enumerate(str2):
+        if char not in feature_matrix:
+            raise ValueError(
+                f"Segment '{char}' at position {i} in str2 not found in feature_matrix"
+            )
+
     m = len(str1)
     n = len(str2)
     # This includes Kondrak's initialization of row 0 and column 0 to all 0s.
@@ -1485,6 +1498,8 @@ def sigma_exp(p, q):
 
     (Kondrak 2002: 54)
     """
+    if len(q) != 2:
+        raise ValueError(f"sigma_exp expects q of length 2, got {len(q)}")
     q1 = q[0]
     q2 = q[1]
     return C_exp - delta(p, q1) - delta(p, q2) - V(p) - max(V(q1), V(q2))

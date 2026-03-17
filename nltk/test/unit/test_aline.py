@@ -2,6 +2,8 @@
 Test Aline algorithm for aligning phonetic sequences
 """
 
+import pytest
+
 from nltk.metrics import aline
 
 
@@ -54,6 +56,13 @@ class TestAlineEdgeCases:
         """Aligning identical strings should produce perfect 1-to-1 mapping."""
         result = aline.align("pat", "pat")
         assert result == [[("p", "p"), ("a", "a"), ("t", "t")]]
+
+    def test_invalid_segment_raises(self):
+        """Unknown segments should raise ValueError, not KeyError."""
+        with pytest.raises(ValueError, match="not found in feature_matrix"):
+            aline.align("p", "!")
+        with pytest.raises(ValueError, match="not found in feature_matrix"):
+            aline.align("☺", "t")
 
     def test_single_char(self):
         """Single characters should align."""

@@ -6,6 +6,7 @@
 # For license information, see LICENSE.TXT
 #
 
+"""Centralized I/O security sentinel for NLTK."""
 import builtins
 import ipaddress
 import os
@@ -105,27 +106,33 @@ def validate_path(path_input, context="NLTK"):
             raise
 
 
-def validate_zip_archive(zip_obj_or_path, target_root, context="ZipAudit"):
+def validate_zip_archive(
+    zip_obj_or_path, target_root, specific_member=None, context="ZipAudit"
+):
     try:
-        # Resolve the base target ONCE
         target = Path(target_root).resolve()
         target_str = str(target)
 
         def _audit(zf):
-            for name in zf.namelist():
-                if "\0" in name:
-                    raise ValueError(f"Null byte in ZIP member: {name}")
+            # If a specific member is provided, only check that one. Otherwise, check all.
+            if specific_member is not None:
+                members_to_check = [specific_member]
+            else:
+                members_to_check = zf.namelist()
 
-                # Fast, in-memory path math instead of slow OS-level .resolve()
-                member_path_str = os.path.abspath(os.path.join(target_str, name))
+            for name in members_to_check:
+                name_str = name.filename if hasattr(name, "filename") else str(name)
+                if "\0" in name_str:
+                    raise ValueError(f"Null byte in ZIP member: {name_str}")
 
-                # Check containment. Adding os.sep prevents prefix confusion
-                # (e.g., /nltk_data vs /nltk_data_hacked)
+                # Fast, in-memory path math
+                member_path_str = os.path.abspath(os.path.join(target_str, name_str))
+
                 if (
                     not member_path_str.startswith(target_str + os.sep)
                     and member_path_str != target_str
                 ):
-                    msg = f"Security Violation [{context}]: Traversal member '{name}' detected."
+                    msg = f"Security Violation [{context}]: Traversal member '{name_str}' detected."
                     if ENFORCE:
                         raise PermissionError(msg)
                     else:
@@ -222,10 +229,24 @@ def urlopen(url, *args, **kwargs):
 class ZipFile(zipfile.ZipFile):
     def extractall(self, path=None, members=None, pwd=None):
         target = path if path is not None else os.getcwd()
-        validate_zip_archive(self, target, context="pathsec.ZipFile.extractall")
+        # If specific members are passed, check only those. Otherwise, check the whole archive.
+        if members is not None:
+            for member in members:
+                validate_zip_archive(
+                    self,
+                    target,
+                    specific_member=member,
+                    context="pathsec.ZipFile.extractall",
+                )
+        else:
+            validate_zip_archive(self, target, context="pathsec.ZipFile.extractall")
+
         super().extractall(path, members, pwd)
 
     def extract(self, member, path=None, pwd=None):
         target = path if path is not None else os.getcwd()
-        validate_zip_archive(self, target, context="pathsec.ZipFile.extract")
+        # ONLY audit the specific member being extracted
+        validate_zip_archive(
+            self, target, specific_member=member, context="pathsec.ZipFile.extract"
+        )
         return super().extract(member, path, pwd)

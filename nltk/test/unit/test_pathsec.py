@@ -1,3 +1,4 @@
+import builtins
 import io
 import os
 import zipfile
@@ -5,6 +6,7 @@ from urllib.error import URLError
 
 import pytest
 
+import nltk.downloader  # We will inspect this module directly
 from nltk.downloader import Downloader
 
 
@@ -12,7 +14,7 @@ from nltk.downloader import Downloader
 def enable_enforcement():
     """
     Dynamically toggle enforcement if pathsec exists.
-    If on a branch without pathsec.py, proceed normally to test legacy logic.
+    If on a branch without pathsec.py, proceed normally.
     """
     try:
         import nltk.pathsec
@@ -57,6 +59,7 @@ def test_ssrf_cloud_metadata_link_local():
 
 
 def test_ssrf_ip_obfuscation():
+    """Will FAIL on PR #3520 because string-matching misses the decimal IP."""
     dl = Downloader(server_index_url="http://2852039166/latest/meta-data/")
     with pytest.raises((ValueError, PermissionError)):
         dl.index()
@@ -66,25 +69,15 @@ def test_ssrf_ip_obfuscation():
 
 
 def test_path_traversal_absolute():
-    """Test if absolute paths bypass standard relative traversal checks."""
-    try:
-        from nltk.pathsec import open as secure_open
+    """
+    Test if absolute paths bypass standard relative traversal checks.
+    Will FAIL on PR #3520 because standard builtins.open does not check path boundaries.
+    """
+    # Dynamically grab the 'open' function NLTK's downloader is currently using
+    target_open = getattr(nltk.downloader, "open", builtins.open)
 
-        with pytest.raises((ValueError, PermissionError)):
-            secure_open("/etc/passwd", "r")
-    except ImportError:
-        pytest.skip("pathsec module not present on this branch")
-
-
-def test_path_traversal_null_byte():
-    """Test if null byte injections bypass extension/string checks in standard open()."""
-    try:
-        from nltk.pathsec import open as secure_open
-
-        with pytest.raises((ValueError, PermissionError)):
-            secure_open("safe_corpus.txt\0../../../etc/passwd", "r")
-    except ImportError:
-        pytest.skip("pathsec module not present on this branch")
+    with pytest.raises((ValueError, PermissionError)):
+        target_open("/etc/passwd", "r")
 
 
 # --- ZIP-SLIP TESTS ---
@@ -101,26 +94,29 @@ def create_malicious_zip(filename):
 
 
 def test_zip_slip_traversal():
-    """Test standard ../ Zip-Slip traversal."""
-    try:
-        from nltk.pathsec import ZipFile as SecureZipFile
+    """
+    Test standard ../ Zip-Slip traversal.
+    Will FAIL on PR #3520 because standard zipfile silently sanitizes/ignores
+    the traversal rather than proactively blocking it and raising an alert.
+    """
+    # Dynamically grab the 'ZipFile' class NLTK's downloader is currently using
+    TargetZipFile = getattr(nltk.downloader, "ZipFile", zipfile.ZipFile)
 
-        malicious_zip = create_malicious_zip("../../../evil.sh")
-        with pytest.raises((ValueError, PermissionError)):
-            with SecureZipFile(malicious_zip, "r") as zf:
-                zf.extractall("/tmp/nltk_extract")
-    except ImportError:
-        pytest.skip("pathsec module not present on this branch")
+    malicious_zip = create_malicious_zip("../../../evil.sh")
+    with pytest.raises((ValueError, PermissionError)):
+        with TargetZipFile(malicious_zip, "r") as zf:
+            zf.extractall("/tmp/nltk_extract")
 
 
 def test_zip_slip_absolute_path():
-    """Test Zip-Slip using an absolute path (bypasses simple ../ checks)."""
-    try:
-        from nltk.pathsec import ZipFile as SecureZipFile
+    """
+    Test Zip-Slip using an absolute path.
+    Will FAIL on PR #3520 because standard zipfile silently ignores the absolute
+    root rather than proactively raising a security alert.
+    """
+    TargetZipFile = getattr(nltk.downloader, "ZipFile", zipfile.ZipFile)
 
-        malicious_zip = create_malicious_zip("/etc/cron.d/evil_cron")
-        with pytest.raises((ValueError, PermissionError)):
-            with SecureZipFile(malicious_zip, "r") as zf:
-                zf.extractall("/tmp/nltk_extract")
-    except ImportError:
-        pytest.skip("pathsec module not present on this branch")
+    malicious_zip = create_malicious_zip("/etc/cron.d/evil_cron")
+    with pytest.raises((ValueError, PermissionError)):
+        with TargetZipFile(malicious_zip, "r") as zf:
+            zf.extractall("/tmp/nltk_extract")

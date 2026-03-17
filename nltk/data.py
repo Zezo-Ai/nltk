@@ -380,8 +380,9 @@ class FileSystemPathPointer(PathPointer, str):
 
     def open(self, encoding=None):
         """
-        Return a seekable read-only stream for the file identified by
-        this path pointer.  Path validation is handled by pathsec.open().
+        Secure open — prevents absolute direct access outside pointer root.
+        Path validation is enforced by pathsec.open() which checks the
+        resolved path against allowed NLTK data roots.
         """
         stream = _secure_open(self._path, "rb")
         if encoding is not None:

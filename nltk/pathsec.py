@@ -7,17 +7,6 @@
 #
 
 """Centralized I/O security sentinel for NLTK."""
-
-__all__ = [
-    "ENFORCE",
-    "open",
-    "urlopen",
-    "ZipFile",
-    "validate_path",
-    "validate_network_url",
-    "validate_zip_archive",
-]
-
 import builtins
 import ipaddress
 import os
@@ -284,3 +273,14 @@ class ZipFile(zipfile.ZipFile):
             self, target, specific_member=member, context="pathsec.ZipFile.extract"
         )
         return super().extract(member, path, pwd)
+
+
+__all__ = [
+    "ENFORCE",
+    "open",
+    "urlopen",
+    "ZipFile",
+    "validate_path",
+    "validate_network_url",
+    "validate_zip_archive",
+]

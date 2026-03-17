@@ -1,4 +1,10 @@
-"""Centralized I/O security sentinel for NLTK."""
+# Natural Language Toolkit: Centralized I/O security sentinel
+#
+# Copyright (C) 2001-2026 NLTK Project
+# Author: Eric Kafe <kafe.eric@gmail.com>
+# URL: <https://www.nltk.org/>
+# For license information, see LICENSE.TXT
+#
 
 import builtins
 import ipaddress
@@ -101,16 +107,24 @@ def validate_path(path_input, context="NLTK"):
 
 def validate_zip_archive(zip_obj_or_path, target_root, context="ZipAudit"):
     try:
+        # Resolve the base target ONCE
         target = Path(target_root).resolve()
+        target_str = str(target)
 
         def _audit(zf):
             for name in zf.namelist():
                 if "\0" in name:
                     raise ValueError(f"Null byte in ZIP member: {name}")
-                member_path = (target / name).resolve()
 
-                # Path-aware containment check prevents prefix-confusion
-                if not (member_path == target or target in member_path.parents):
+                # Fast, in-memory path math instead of slow OS-level .resolve()
+                member_path_str = os.path.abspath(os.path.join(target_str, name))
+
+                # Check containment. Adding os.sep prevents prefix confusion
+                # (e.g., /nltk_data vs /nltk_data_hacked)
+                if (
+                    not member_path_str.startswith(target_str + os.sep)
+                    and member_path_str != target_str
+                ):
                     msg = f"Security Violation [{context}]: Traversal member '{name}' detected."
                     if ENFORCE:
                         raise PermissionError(msg)

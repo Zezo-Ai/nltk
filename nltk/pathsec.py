@@ -40,7 +40,7 @@ def _get_allowed_roots():
         return _ALLOWED_ROOTS_CACHE
 
     roots = set()
-    # FIX: Use os.pathsep for environment variables to prevent directory leakage
+    # FIX: Use os.pathsep for environment variables (Copilot High)
     for p in current_paths + env_paths.split(os.pathsep):
         if p:
             try:
@@ -49,7 +49,6 @@ def _get_allowed_roots():
             except:
                 continue
 
-    # Trust standard data locations and the system TEMP directory
     import tempfile
 
     for loc in ["~/nltk_data", "/usr/share/nltk_data", tempfile.gettempdir()]:
@@ -70,10 +69,8 @@ def validate_path(path_input, context="NLTK"):
     if isinstance(path_input, int) or not path_input or not str(path_input).strip():
         return
     try:
-        # 1. Handle NLTK Pointers
         raw = path_input.path if hasattr(path_input, "path") else str(path_input)
 
-        # 2. URL Handling
         if "://" in raw:
             parsed = urlparse(raw)
             if parsed.scheme in ("http", "https", "ftp"):
@@ -81,7 +78,6 @@ def validate_path(path_input, context="NLTK"):
             if parsed.scheme == "file":
                 raw = unquote(parsed.path)
 
-        # 3. ZIP TRANSPARENCY: Truncate to the archive file
         lower_raw = raw.lower()
         if ".zip" in lower_raw:
             zip_idx = lower_raw.find(".zip") + 4
@@ -89,7 +85,6 @@ def validate_path(path_input, context="NLTK"):
 
         target = Path(raw).resolve()
 
-        # 4. Containment Check against authorized roots
         allowed_roots = _get_allowed_roots()
         if any(target == root or target.is_relative_to(root) for root in allowed_roots):
             return
@@ -98,7 +93,6 @@ def validate_path(path_input, context="NLTK"):
         try:
             cwd = Path(os.getcwd()).resolve()
             if target == cwd or target.is_relative_to(cwd):
-                # Only allow if CWD is explicitly in the search path (Explicit Opt-In)
                 if any(cwd == root for root in allowed_roots):
                     return
 
@@ -145,10 +139,8 @@ def validate_zip_archive(
             )
             for name in members_to_check:
                 name_str = name.filename if hasattr(name, "filename") else str(name)
-
                 if "\0" in name_str:
                     raise ValueError(f"Null byte in ZIP member: {name_str}")
-
                 member_path_str = os.path.abspath(os.path.join(target_str, name_str))
                 if (
                     not member_path_str.startswith(target_str + os.sep)
@@ -174,7 +166,7 @@ def validate_zip_archive(
 
 @lru_cache(maxsize=256)
 def _resolve_hostname(hostname):
-    """Cached hostname resolution to mitigate DNS rebinding."""
+    """Cached hostname resolution to mitigate DNS rebinding (Copilot Medium)."""
     try:
         return socket.getaddrinfo(hostname, None, proto=socket.IPPROTO_TCP)
     except:
@@ -188,14 +180,11 @@ def validate_network_url(url_input, context="NetworkIO"):
     try:
         parsed = urlparse(str(url_input))
 
-        # 1. Block file:// in a network context to prevent local file disclosure
+        # FIX: Cross-route file scheme to path validation (Copilot High)
         if parsed.scheme == "file":
-            # Direct to path validation instead of allowing it as a "URL"
-            local_path = unquote(parsed.path)
-            validate_path(local_path, context=f"{context}.file_scheme")
+            validate_path(unquote(parsed.path), context=f"{context}.file_scheme")
             return
 
-        # 2. Strict scheme check for true network calls
         if parsed.scheme not in ("http", "https"):
             msg = (
                 f"Security Violation [{context}]: Unsupported scheme '{parsed.scheme}'."
@@ -206,7 +195,6 @@ def validate_network_url(url_input, context="NetworkIO"):
                 warnings.warn(msg, RuntimeWarning, stacklevel=3)
             return
 
-        # 3. SSRF / DNS Rebinding checks (existing logic)
         for result in _resolve_hostname(parsed.hostname or ""):
             ip = ipaddress.ip_address(result[4][0])
             if ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_private:
@@ -223,7 +211,7 @@ def validate_network_url(url_input, context="NetworkIO"):
 
 
 class _ValidatingRedirectHandler(urllib.request.HTTPRedirectHandler):
-    """Ensures that every step of a redirect chain is re-validated against SSRF."""
+    """Ensures that every step of a redirect chain is re-validated against SSRF (Copilot High)."""
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         validate_network_url(newurl, context="NetworkRedirect")
@@ -234,7 +222,6 @@ def urlopen(url, *args, **kwargs):
     """Secure wrapper for urllib.request.urlopen with redirect validation."""
     url_str = url.full_url if hasattr(url, "full_url") else str(url)
     validate_network_url(url_str, context="pathsec.urlopen")
-    # Use custom opener to enforce validation on 30x redirects
     opener = urllib.request.build_opener(_ValidatingRedirectHandler())
     return opener.open(url, *args, **kwargs)
 

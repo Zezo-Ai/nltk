@@ -161,7 +161,11 @@ class TextTilingTokenizer(TokenizerI):
     def _vocabulary_introduction(self, tokseqs):
         """Compute gap scores using the Vocabulary Introduction method.
 
-        From Hearst (1997), Section 3.2:
+        From Marti A. Hearst (1997) "TextTiling: Segmenting Text into
+        Multi-Paragraph Subtopic Passages", Computational Linguistics,
+        23(1), pp. 33-64. https://aclanthology.org/J97-1003.pdf
+
+        Section 3.2:
 
         The idea behind this approach is that the introduction of a new
         topic in a text is signaled by the distribution of new vocabulary

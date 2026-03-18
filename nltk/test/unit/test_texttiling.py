@@ -1,5 +1,9 @@
 """
-Unit tests for nltk.tokenize.texttiling (Hearst 1997).
+Unit tests for nltk.tokenize.texttiling.
+
+Marti A. Hearst (1997) "TextTiling: Segmenting Text into Multi-Paragraph
+Subtopic Passages", Computational Linguistics, 23(1), pp. 33-64.
+https://aclanthology.org/J97-1003.pdf
 """
 
 from nltk.tokenize.texttiling import (

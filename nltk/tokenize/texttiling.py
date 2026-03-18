@@ -16,7 +16,8 @@ except ImportError:
 
 from nltk.tokenize.api import TokenizerI
 
-BLOCK_COMPARISON, VOCABULARY_INTRODUCTION = 0, 1
+BLOCK_COMPARISON = "block_comparison"
+VOCABULARY_INTRODUCTION = "vocabulary_introduction"
 LC, HC = 0, 1
 DEFAULT_SMOOTHING = [0]
 
@@ -540,6 +541,7 @@ def demo(text=None, similarity_method=BLOCK_COMPARISON):
     if text is None:
         text = brown.raw()[:10000]
     s, ss, d, b = tt.tokenize(text)
+    pylab.title(f"TextTiling: {similarity_method}")
     pylab.xlabel("Sentence Gap index")
     pylab.ylabel("Gap Scores")
     pylab.plot(range(len(s)), s, label="Gap Scores")

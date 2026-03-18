@@ -118,7 +118,7 @@ class TextTilingTokenizer(TokenizerI):
         if self.similarity_method == BLOCK_COMPARISON:
             gap_scores = self._block_comparison(tokseqs, token_table)
         elif self.similarity_method == VOCABULARY_INTRODUCTION:
-            gap_scores = self._vocabulariy_introduction_comparision(tokseqs)
+            gap_scores = self._vocabulary_introduction(tokseqs)
         else:
             raise ValueError(
                 f"Similarity method {self.similarity_method} not recognized"
@@ -157,35 +157,78 @@ class TextTilingTokenizer(TokenizerI):
             return gap_scores, smooth_scores, depth_scores, segment_boundaries
         return segmented_text
 
-    def _vocabulariy_introduction_comparision(self, tokseqs):
-        """
-        Implements the Vocabulary Introduction method. Based on the implementation by https://github.com/stylianipantela/texttiling/blob/master/texttiling.py#L140
-        Measures and scores the amount of new vocabulary introduced by each token sequence, indicating a potential transition from one topic to another.
-        """
-        tokseq_sets = [set(token for token, _ in seq.wrdindex_list) for seq in tokseqs]
-        seqlen_doubled = self.w * 2
-        
-        known_words_left_of_gap = set()        
-        known_words_right_of_gap = tokseq_sets[0]
+    def _vocabulary_introduction(self, tokseqs):
+        """Compute gap scores using the Vocabulary Introduction method.
 
+        From Hearst (1997), Section 3.2:
+
+        The idea behind this approach is that the introduction of a new
+        topic in a text is signaled by the distribution of new vocabulary
+        items. For each pseudosentence gap, we count the number of new
+        word types appearing on each side of the gap that have not been
+        seen in earlier pseudosentences on that side.
+
+        Schematically (adapted from Fig 3, Hearst 1997)::
+
+            pseudosentences:  [ s1 ] [ s2 ] [ s3 ] [ s4 ] [ s5 ] ...
+                                          ^
+                                       gap at i=2
+                                          |
+              left side of gap:  s1, s2   |   right side: s3, s4, s5, ...
+              (scan left->right)          |   (scan right->left)
+                                          |
+              new_L(i) = words in s_i     |   new_R(i) = words in s_{i+1}
+                not seen in s1..s_{i-1}   |   not seen in s_{i+2}..s_N
+
+        The score for each gap is::
+
+            score(i) = ( new_L(i) + new_R(i) ) / (2 * w)
+
+        where ``w`` is the pseudosentence size, so ``2 * w`` normalizes
+        by the maximum possible number of new word types across both
+        sides of the gap.
+
+        :param tokseqs: list of TokenSequence objects
+        :return: list of gap scores (length = len(tokseqs) - 1)
+        """
+        n = len(tokseqs)
+        if n < 2:
+            return []
+
+        # Extract the word type sets for each pseudosentence
+        tokseq_sets = [{token for token, _ in seq.wrdindex_list} for seq in tokseqs]
+
+        # Normalization factor (Section 3.2)
+        norm = self.w * 2
+
+        # Scan left-to-right: for each position i, count how many words
+        # in tokseq_sets[i] are new (not seen in any s_0..s_{i-1}).
+        new_left = []
+        seen_left = set()
+        for i in range(n):
+            new_count = len(tokseq_sets[i] - seen_left)
+            new_left.append(new_count)
+            seen_left |= tokseq_sets[i]
+
+        # Scan right-to-left: for each position i, count how many words
+        # in tokseq_sets[i] are new (not seen in any s_{i+1}..s_{N-1}).
+        new_right = [0] * n
+        seen_right = set()
+        for i in range(n - 1, -1, -1):
+            new_count = len(tokseq_sets[i] - seen_right)
+            new_right[i] = new_count
+            seen_right |= tokseq_sets[i]
+
+        # Score each gap between pseudosentence i and i+1.
+        # The left contribution comes from the pseudosentence just
+        # before the gap (new_left[i]), and the right contribution
+        # from the pseudosentence just after (new_right[i+1]).
         gap_scores = []
-        for gap_index in range(1, len(tokseqs) - 1):
-            new_words_left_of_gap = tokseq_sets[gap_index-1].difference(known_words_left_of_gap)
-            new_words_right_of_gap = tokseq_sets[gap_index+1].difference(known_words_right_of_gap)
-
-            gap_score = (len(new_words_left_of_gap) + len(new_words_right_of_gap)) / seqlen_doubled
-            gap_scores.append(gap_score)
-
-            known_words_left_of_gap.update(tokseq_sets[gap_index-1])
-            known_words_right_of_gap.update(tokseq_sets[gap_index+1])
-        
-        # special case last element
-        new_words_left_of_gap = len(tokseq_sets[-1].difference(known_words_left_of_gap))
-        gap_scores.append(new_words_left_of_gap/seqlen_doubled)
+        for i in range(n - 1):
+            score = (new_left[i] + new_right[i + 1]) / norm
+            gap_scores.append(score)
 
         return gap_scores
-
-
 
     def _block_comparison(self, tokseqs, token_table):
         """Implements the block comparison method"""
@@ -462,7 +505,9 @@ def smooth(x, window_len=11, window="flat"):
         raise ValueError(f"smooth only accepts 1 dimension arrays, was {x.ndim}.")
 
     if x.size < window_len:
-        raise ValueError(f"Input vector ({len(x)}) needs to be bigger than window size ({window_len}).")
+        raise ValueError(
+            f"Input vector ({len(x)}) needs to be bigger than window size ({window_len})."
+        )
 
     if window_len < 3:
         return x
@@ -489,13 +534,13 @@ def demo(text=None, similarity_method=BLOCK_COMPARISON):
     from matplotlib import pylab
 
     from nltk.corpus import brown
-    
+
     pylab.figure()
     tt = TextTilingTokenizer(demo_mode=True, similarity_method=similarity_method)
     if text is None:
         text = brown.raw()[:10000]
     s, ss, d, b = tt.tokenize(text)
-    pylab.title(f'TextTiling {similarity_method} Similarity')
+    pylab.title(f"TextTiling {similarity_method} Similarity")
     pylab.xlabel("Sentence Gap index")
     pylab.ylabel("Gap Scores")
     pylab.plot(range(len(s)), s, label="Gap Scores")

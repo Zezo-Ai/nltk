@@ -20,34 +20,44 @@ from urllib.request import urlopen as _original_urlopen
 
 ENFORCE = False
 
-# Cache for static roots (standard locations, env vars, temp dir) that
-# don't change at runtime.  Computed once on first access.
-_static_roots_cache = None
+# Cache for expensive Path.resolve() operations
+_ALLOWED_ROOTS_CACHE = None
+_LAST_DATA_PATHS = None
 
 
-def _get_static_roots():
-    """Return cached static allowed roots (env vars, standard locations, tempdir)."""
-    global _static_roots_cache
-    if _static_roots_cache is not None:
-        return _static_roots_cache
+def _get_allowed_roots():
+    global _ALLOWED_ROOTS_CACHE, _LAST_DATA_PATHS
+
+    current_paths = []
+    if "nltk.data" in sys.modules:
+        current_paths = list(getattr(sys.modules["nltk.data"], "path", []))
+
+    env_paths = os.environ.get("NLTK_DATA", "")
+
+    # Cache invalidation: Check if NLTK data paths or env vars have changed at runtime
+    current_state = (current_paths, env_paths)
+    if _ALLOWED_ROOTS_CACHE is not None and _LAST_DATA_PATHS == current_state:
+        return _ALLOWED_ROOTS_CACHE
 
     roots = set()
 
-    # 1. Environment variables
-    for p in os.environ.get("NLTK_DATA", "").split(os.pathsep):
+    # 1. Dynamic check of runtime NLTK data paths
+    for p in current_paths:
+        try:
+            roots.add(Path(p).resolve())
+        except Exception:
+            continue
+
+    # 2. Environment variables
+    for p in env_paths.split(os.pathsep):
         if p:
             try:
                 roots.add(Path(p).resolve())
             except Exception:
                 continue
 
-    # 2. Standard NLTK data locations (NOT cwd — an attacker who controls
-    #    the working directory could bypass all path checks)
-    standard_locs = [
-        "~/nltk_data",
-        "/usr/share/nltk_data",
-        "/usr/lib/nltk_data",
-    ]
+    # 3. Standard locations (Note: os.getcwd() removed from standard roots)
+    standard_locs = ["~/nltk_data", "/usr/share/nltk_data", "/usr/lib/nltk_data"]
     for loc in standard_locs:
         try:
             p = Path(loc).expanduser().resolve()
@@ -56,7 +66,7 @@ def _get_static_roots():
         except Exception:
             continue
 
-    # 3. System temp dir
+    # 4. System temp dir
     import tempfile
 
     try:
@@ -64,28 +74,8 @@ def _get_static_roots():
     except Exception:
         pass
 
-    _static_roots_cache = roots
-    return roots
-
-
-def _get_allowed_roots():
-    """Return the full set of allowed root directories.
-
-    Static roots (env vars, standard locations, tempdir) are cached.
-    Dynamic roots from ``nltk.data.path`` are always checked fresh
-    since users can modify ``nltk.data.path`` at runtime.
-    """
-    roots = set(_get_static_roots())
-
-    # Always read nltk.data.path dynamically — it's a mutable list
-    # that users modify at runtime via nltk.data.path.append()
-    if "nltk.data" in sys.modules:
-        for p in getattr(sys.modules["nltk.data"], "path", []):
-            try:
-                roots.add(Path(p).resolve())
-            except Exception:
-                continue
-
+    _ALLOWED_ROOTS_CACHE = roots
+    _LAST_DATA_PATHS = current_state
     return roots
 
 
@@ -118,12 +108,32 @@ def validate_path(path_input, context="NLTK"):
             target = Path(raw).resolve()
 
         allowed = _get_allowed_roots()
-        if not any(target == root or root in target.parents for root in allowed):
-            msg = f"Security Violation [{context}]: Unauthorized path {target}"
-            if ENFORCE:
-                raise PermissionError(msg)
-            else:
-                warnings.warn(msg, RuntimeWarning, stacklevel=3)
+
+        # Check standard secure roots first
+        if any(target == root or root in target.parents for root in allowed):
+            return
+
+        # Fallback: check CWD to prevent breaking local student scripts
+        try:
+            cwd = Path(os.getcwd()).resolve()
+            if target == cwd or cwd in target.parents:
+                warnings.warn(
+                    f"Security Warning [{context}]: Path {target} allowed via current working directory. "
+                    "Relying on CWD is insecure for web/server environments. Please configure NLTK_DATA.",
+                    RuntimeWarning,
+                    stacklevel=3,
+                )
+                return
+        except Exception:
+            pass
+
+        # If it fails standard roots AND cwd
+        msg = f"Security Violation [{context}]: Unauthorized path {target}"
+        if ENFORCE:
+            raise PermissionError(msg)
+        else:
+            warnings.warn(msg, RuntimeWarning, stacklevel=3)
+
     except Exception:
         if ENFORCE:
             raise
@@ -138,10 +148,9 @@ def validate_zip_archive(
 
         def _audit(zf):
             # If a specific member is provided, only check that one. Otherwise, check all.
-            if specific_member is not None:
-                members_to_check = [specific_member]
-            else:
-                members_to_check = zf.namelist()
+            members_to_check = (
+                [specific_member] if specific_member is not None else zf.namelist()
+            )
 
             for name in members_to_check:
                 name_str = name.filename if hasattr(name, "filename") else str(name)
@@ -276,11 +285,11 @@ class ZipFile(zipfile.ZipFile):
 
 
 __all__ = [
-    "ENFORCE",
+    "validate_path",
+    "validate_zip_archive",
+    "validate_network_url",
     "open",
     "urlopen",
     "ZipFile",
-    "validate_path",
-    "validate_network_url",
-    "validate_zip_archive",
+    "ENFORCE",
 ]

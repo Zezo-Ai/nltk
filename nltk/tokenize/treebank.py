@@ -288,12 +288,18 @@ class TreebankWordDetokenizer(TokenizerI):
     ENDING_QUOTES = [
         (re.compile(r"([^' ])\s('ll|'LL|'re|'RE|'ve|'VE|n't|N'T) "), r"\1\2 "),
         (re.compile(r"([^' ])\s('[sS]|'[mM]|'[dD]|') "), r"\1\2 "),
-        (re.compile(r"(\S)\s(\'\')"), r"\1\2"),
+        # Fix #3260: exclude single quote from attaching '' to avoid
+        # swallowing the closing single quote in nested quote sequences.
+        (re.compile(r"([^'\s])\s(\'\')"), r"\1\2"),
+        # Remove space before closing quotes after punctuation or single quote
+        (re.compile(r"([,.;:!?'])\s+(\"|\'\')"), r"\1\2"),
         (
             re.compile(r"(\'\')\s([.,:)\]>};%])"),
             r"\1\2",
         ),  # Quotes followed by no-left-padded punctuations.
         (re.compile(r"''"), '"'),
+        # Fix #3260: swap ,"' to ,'" (inside-out closing order)
+        (re.compile(r'([,.;:!?])"(\')'), r"\1\2" '"'),
     ]
 
     # Handles double dashes

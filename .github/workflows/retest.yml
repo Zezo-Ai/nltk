@@ -11,6 +11,7 @@ jobs:
       github.event.issue.pull_request &&
       (
         contains(github.event.comment.body, '/retest') ||
+        contains(github.event.comment.body, '[CI: retest]') ||
         contains(github.event.comment.body, '[ci: retest]')
       )
     runs-on: ubuntu-latest

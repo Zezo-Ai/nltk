@@ -7,8 +7,10 @@ Please report security issues to `nltk.team@gmail.com`
 ## Security Hardening
 
 NLTK includes a centralized I/O security module (`nltk.pathsec`) that
-validates file paths, network URLs, and zip archives. By default, it
-operates in **warn-only mode** to avoid breaking existing workflows.
+validates file paths, network URLs, and zip archives. During the initial
+transition phase, it operates by default in **warn-only mode**, to avoid
+breaking existing workflows. In a later release, it will be switched to
+enforce the stricter security policy by default.
 
 ### Enabling strict enforcement
 
@@ -25,6 +27,26 @@ nltk.pathsec.ENFORCE = True
 With `ENFORCE = True`, unauthorized file access, SSRF attempts, and
 zip-slip attacks will raise `PermissionError` instead of emitting
 warnings.
+
+
+### Current Working Directory (CWD) Access
+
+To maintain a "zero-friction" experience for students and researchers,
+NLTK permits access to resources located in the process's current
+working directory by default.
+
+* **Standard Mode (`ENFORCE=False`):** Accessing data in the CWD is
+permitted but triggers a `RuntimeWarning` to alert users that this
+behavior may be insecure in shared or server-side environments.
+
+* **Strict Mode (`ENFORCE=True`):** Implicit CWD access is **disabled**.
+To authorize the local directory in strict mode, users must explicitly
+append it to the search path:
+  ```python
+  import nltk
+  nltk.data.path.append('.')
+  ```
+
 
 ### What is protected
 

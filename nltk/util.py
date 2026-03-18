@@ -222,24 +222,28 @@ def filestring(f, allowed_dir=None):
     if hasattr(f, "read"):
         return f.read()
     elif isinstance(f, str):
-        if allowed_dir is not None:
-            target_path = Path(f).resolve()
-            safe_root = Path(allowed_dir).resolve()
+        # FIX: Resolve the path once to prevent symlink/rename races
+        target_path = Path(f).resolve()
 
-            # Aligning with PermissionError for sandbox test compliance
+        if allowed_dir is not None:
+            safe_root = Path(allowed_dir).resolve()
+            # FIX: Use is_relative_to for robust boundary check
             if not target_path.is_relative_to(safe_root):
                 raise PermissionError(
-                    f"Path traversal attempt blocked: {target_path} is outside {safe_root}"
+                    f"Security Violation: Path {target_path} is outside allowed_dir {safe_root}"
                 )
 
-        try:
-            with open(f, encoding="utf-8", errors="ignore") as infile:
-                return infile.read()
-        except UnicodeDecodeError:
-            with open(f, encoding="latin-1") as infile:
-                return infile.read()
-    else:
-        raise ValueError("filestring() expects a filename or a file-like object")
+        # FIX: Use _secure_open with the resolved target_path
+        with _secure_open(target_path, encoding="utf-8", errors="ignore") as infile:
+            return infile.read()
+
+    # Fallback for other types
+    try:
+        with _secure_open(f, encoding="utf-8", errors="ignore") as infile:
+            return infile.read()
+    except UnicodeDecodeError:
+        with _secure_open(f, encoding="latin-1") as infile:
+            return infile.read()
 
 
 ##########################################################################

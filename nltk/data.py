@@ -1114,7 +1114,11 @@ def _open(resource_url):
         loaded from.  The default protocol is "nltk:", which searches
         for the file in the the NLTK data package.
     """
+    # Restore "no protocol" handling for internal resilience
     resource_url = str(resource_url)
+    if ":" not in resource_url:
+        resource_url = "nltk:" + resource_url
+
     protocol, path_ = resource_url.split(":", 1)
 
     if protocol == "nltk":
@@ -1123,12 +1127,12 @@ def _open(resource_url):
         import urllib.request
 
         local_path = urllib.request.url2pathname(path_)
-        # Routing through find() allows NLTK to handle ZipFile pointers.
-        # If find() fails, we fall back to a direct secure open.
         try:
             return find(local_path).open()
         except LookupError:
-            return open(local_path, "rb")
+            # FIX: Use _secure_open to ensure the sentinel validates
+            # paths that find() cannot resolve.
+            return _secure_open(local_path, "rb")
     else:
         return _secure_urlopen(resource_url)
 

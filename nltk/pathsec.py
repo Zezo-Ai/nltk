@@ -6,18 +6,17 @@
 # For license information, see LICENSE.TXT
 #
 """Centralized I/O security sentinel for NLTK."""
-
 import builtins
 import ipaddress
 import os
 import socket
 import sys
+import urllib.request
 import warnings
 import zipfile
 from functools import lru_cache
 from pathlib import Path
 from urllib.parse import unquote, urlparse
-from urllib.request import urlopen as _original_urlopen
 
 # Security Enforcement Toggle
 ENFORCE = False
@@ -27,6 +26,7 @@ _LAST_DATA_PATHS = None
 
 
 def _get_allowed_roots():
+    """Dynamically determines allowed directories based on NLTK data paths."""
     global _ALLOWED_ROOTS_CACHE, _LAST_DATA_PATHS
 
     current_paths = []
@@ -40,23 +40,14 @@ def _get_allowed_roots():
         return _ALLOWED_ROOTS_CACHE
 
     roots = set()
-
-    # Resolve search paths (including any PathPointers)
-    for p in current_paths + env_paths.split(os.sep):
+    # FIX: Use os.pathsep for environment variables to prevent directory leakage
+    for p in current_paths + env_paths.split(os.pathsep):
         if p:
             try:
                 raw_p = p.path if hasattr(p, "path") else p
                 roots.add(Path(str(raw_p)).resolve())
             except:
                 continue
-
-    # Trust the NLTK library directory for internal .map/.tab files
-    try:
-        import nltk
-
-        roots.add(Path(nltk.__file__).parent.resolve())
-    except:
-        pass
 
     # Trust standard data locations and the system TEMP directory
     import tempfile
@@ -75,10 +66,11 @@ def _get_allowed_roots():
 
 
 def validate_path(path_input, context="NLTK"):
+    """Ensures file access is restricted to allowed data directories."""
     if isinstance(path_input, int) or not path_input or not str(path_input).strip():
         return
     try:
-        # 1. Handle Pointers
+        # 1. Handle NLTK Pointers
         raw = path_input.path if hasattr(path_input, "path") else str(path_input)
 
         # 2. URL Handling
@@ -97,24 +89,34 @@ def validate_path(path_input, context="NLTK"):
 
         target = Path(raw).resolve()
 
-        # 4. Containment Check
-        if any(
-            target == root or target.is_relative_to(root)
-            for root in _get_allowed_roots()
-        ):
+        # 4. Containment Check against authorized roots
+        allowed_roots = _get_allowed_roots()
+        if any(target == root or target.is_relative_to(root) for root in allowed_roots):
             return
 
-        # 5. CWD Fallback (Safety Valve)
+        # 5. CWD Fallback (Explicit Opt-In for ENFORCE mode)
         try:
             cwd = Path(os.getcwd()).resolve()
             if target == cwd or target.is_relative_to(cwd):
-                warnings.warn(
-                    f"Security Warning [{context}]: Path {target} allowed via CWD.",
-                    RuntimeWarning,
-                    stacklevel=3,
+                # Only allow if CWD is explicitly in the search path (Explicit Opt-In)
+                if any(cwd == root for root in allowed_roots):
+                    return
+
+                msg = (
+                    f"Security Violation [{context}]: CWD access is restricted in ENFORCE mode. "
+                    "To allow local data, use: nltk.data.path.append('.')"
                 )
-                return
-        except:
+
+                if ENFORCE:
+                    raise PermissionError(msg)
+                else:
+                    warnings.warn(
+                        f"Security Warning [{context}]: Path {target} allowed via CWD.",
+                        RuntimeWarning,
+                        stacklevel=3,
+                    )
+                    return
+        except Exception:
             pass
 
         msg = f"Security Violation [{context}]: Unauthorized path {target}"
@@ -122,12 +124,11 @@ def validate_path(path_input, context="NLTK"):
             raise PermissionError(msg)
         else:
             warnings.warn(msg, RuntimeWarning, stacklevel=3)
-
     except (PermissionError, ValueError):
         raise
-    except (OSError, TypeError) as e:
+    except Exception as e:
         if ENFORCE:
-            raise PermissionError(f"Path validation failed [{context}]: {e}") from e
+            raise PermissionError(f"Path validation failed [{context}]: {e}")
 
 
 def validate_zip_archive(
@@ -145,11 +146,9 @@ def validate_zip_archive(
             for name in members_to_check:
                 name_str = name.filename if hasattr(name, "filename") else str(name)
 
-                # Null-byte protection (from upstream)
                 if "\0" in name_str:
                     raise ValueError(f"Null byte in ZIP member: {name_str}")
 
-                # Path traversal check
                 member_path_str = os.path.abspath(os.path.join(target_str, name_str))
                 if (
                     not member_path_str.startswith(target_str + os.sep)
@@ -173,78 +172,82 @@ def validate_zip_archive(
             raise PermissionError(f"Zip validation failed [{context}]: {e}") from e
 
 
+@lru_cache(maxsize=256)
+def _resolve_hostname(hostname):
+    """Cached hostname resolution to mitigate DNS rebinding."""
+    try:
+        return socket.getaddrinfo(hostname, None, proto=socket.IPPROTO_TCP)
+    except:
+        return []
+
+
 def validate_network_url(url_input, context="NetworkIO"):
-    """Hardened URL validation with SSRF protection and timeouts."""
+    """Hardened URL validation with SSRF protection."""
     if not url_input or not str(url_input).strip():
         return
     try:
         parsed = urlparse(str(url_input))
+
+        # 1. Block file:// in a network context to prevent local file disclosure
+        if parsed.scheme == "file":
+            # Direct to path validation instead of allowing it as a "URL"
+            local_path = unquote(parsed.path)
+            validate_path(local_path, context=f"{context}.file_scheme")
+            return
+
+        # 2. Strict scheme check for true network calls
         if parsed.scheme not in ("http", "https"):
-            msg = f"Security Violation [{context}]: Invalid scheme '{parsed.scheme}'."
+            msg = (
+                f"Security Violation [{context}]: Unsupported scheme '{parsed.scheme}'."
+            )
             if ENFORCE:
                 raise PermissionError(msg)
             else:
                 warnings.warn(msg, RuntimeWarning, stacklevel=3)
             return
 
-        hostname = parsed.hostname
-        if not hostname:
-            return
-
-        # Upstream hardening: Explicit timeout for DNS resolution
-        try:
-            old_timeout = socket.getdefaulttimeout()
-            socket.setdefaulttimeout(5)
-            try:
-                addr_info = socket.getaddrinfo(hostname, None)
-            finally:
-                socket.setdefaulttimeout(old_timeout)
-
-            for result in addr_info:
-                ip_str = result[4][0]
-                ip_obj = ipaddress.ip_address(ip_str)
-
-                # Block loopback, link-local, multicast, and private ranges
-                if (
-                    ip_obj.is_loopback
-                    or ip_obj.is_link_local
-                    or ip_obj.is_multicast
-                    or ip_obj.is_private
-                ):
-                    msg = f"Security Violation [{context}]: Blocked SSRF attempt to {ip_str} ({hostname})"
-                    if ENFORCE:
-                        raise PermissionError(msg)
-                    else:
-                        warnings.warn(msg, RuntimeWarning, stacklevel=3)
-        except (socket.gaierror, ValueError):
-            pass
-        except socket.timeout:
-            if ENFORCE:
-                raise PermissionError(
-                    f"Security Violation [{context}]: DNS resolution timed out for {hostname}"
-                )
-
-    except PermissionError:
+        # 3. SSRF / DNS Rebinding checks (existing logic)
+        for result in _resolve_hostname(parsed.hostname or ""):
+            ip = ipaddress.ip_address(result[4][0])
+            if ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_private:
+                msg = f"Security Violation [{context}]: Blocked SSRF attempt to restricted IP {ip}"
+                if ENFORCE:
+                    raise PermissionError(msg)
+                else:
+                    warnings.warn(msg, RuntimeWarning, stacklevel=3)
+    except (PermissionError, ValueError):
         raise
-    except (OSError, ValueError) as e:
+    except Exception as e:
         if ENFORCE:
-            raise PermissionError(f"URL validation failed [{context}]: {e}") from e
+            raise PermissionError(f"URL validation failed [{context}]: {e}")
+
+
+class _ValidatingRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Ensures that every step of a redirect chain is re-validated against SSRF."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        validate_network_url(newurl, context="NetworkRedirect")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def urlopen(url, *args, **kwargs):
+    """Secure wrapper for urllib.request.urlopen with redirect validation."""
+    url_str = url.full_url if hasattr(url, "full_url") else str(url)
+    validate_network_url(url_str, context="pathsec.urlopen")
+    # Use custom opener to enforce validation on 30x redirects
+    opener = urllib.request.build_opener(_ValidatingRedirectHandler())
+    return opener.open(url, *args, **kwargs)
 
 
 def open(file, mode="r", **kwargs):
+    """Secure wrapper for builtins.open."""
     validate_path(file, context="pathsec.open")
     return builtins.open(file, mode=mode, **kwargs)
 
 
-def urlopen(url, *args, **kwargs):
-    validate_network_url(
-        url.full_url if hasattr(url, "full_url") else str(url),
-        context="pathsec.urlopen",
-    )
-    return _original_urlopen(url, *args, **kwargs)
-
-
 class ZipFile(zipfile.ZipFile):
+    """Secure wrapper for zipfile.ZipFile."""
+
     def __init__(self, file, *args, **kwargs):
         if isinstance(file, (str, Path)):
             validate_path(file, context="pathsec.ZipFile")

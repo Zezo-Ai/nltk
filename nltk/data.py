@@ -39,6 +39,7 @@ import pickle
 import re
 import sys
 import textwrap
+import urllib.request
 import zipfile
 from abc import ABCMeta, abstractmethod
 from gzip import WRITE as GZ_WRITE
@@ -48,7 +49,7 @@ from urllib.request import url2pathname
 
 from nltk.pathsec import ZipFile
 from nltk.pathsec import open as _secure_open
-from nltk.pathsec import urlopen
+from nltk.pathsec import urlopen as _secure_urlopen
 
 # Reject unsafe no-protocol paths: traversal segments, trailing '..', absolute paths,
 # backslashes, Windows drive letters. Use a raw-string pattern and do not anchor only
@@ -1113,16 +1114,23 @@ def _open(resource_url):
         loaded from.  The default protocol is "nltk:", which searches
         for the file in the the NLTK data package.
     """
-    resource_url = normalize_resource_url(resource_url)
-    protocol, path_ = split_resource_url(resource_url)
+    resource_url = str(resource_url)
+    protocol, path_ = resource_url.split(":", 1)
 
-    if protocol is None or protocol.lower() == "nltk":
-        return find(path_, path + [""]).open()
-    elif protocol.lower() == "file":
-        # urllib might not use mode='rb', so handle this one ourselves:
-        return find(path_, [""]).open()
+    if protocol == "nltk":
+        return find(path_).open()
+    elif protocol == "file":
+        import urllib.request
+
+        local_path = urllib.request.url2pathname(path_)
+        # Routing through find() allows NLTK to handle ZipFile pointers.
+        # If find() fails, we fall back to a direct secure open.
+        try:
+            return find(local_path).open()
+        except LookupError:
+            return open(local_path, "rb")
     else:
-        return urlopen(resource_url)
+        return _secure_urlopen(resource_url)
 
 
 ######################################################################
@@ -1184,12 +1192,11 @@ class OpenOnDemandZipFile(ZipFile):
 
     def read(self, name):
         assert self.fp is None
+        # This will be validated by pathsec.open
         self.fp = _secure_open(self.filename, "rb")
-        value = ZipFile.read(self, name)
-        # Ensure that _fileRefCnt needs to be set for Python2and3 compatible code.
-        # Since we only opened one file here, we add 1.
-        self._fileRefCnt += 1
-        self.close()
+        value = zipfile.ZipFile.read(self, name)
+        self.fp.close()
+        self.fp = None
         return value
 
     def write(self, *args, **kwargs):

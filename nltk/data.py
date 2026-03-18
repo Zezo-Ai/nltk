@@ -394,20 +394,35 @@ class FileSystemPathPointer(PathPointer, str):
 
     def join(self, fileid):
         """
-        Harden join() to prevent traversal & ensure corpus-root sandbox.
+        Return a new path pointer for the given file relative to this root.
+
+        Prevents path traversal via ``..``, absolute paths, and symlink
+        escapes by resolving the joined path and checking containment
+        within the corpus root. Fixes GHSA-r6gq-whwq-mvg9.
         """
         fileid = str(fileid).replace("\\", "/")
 
-        # Block ../ traversal
+        # Block ../ traversal and absolute paths
         if ".." in fileid.split("/"):
             raise ValueError(f"Traversal blocked: {fileid}")
+        if os.path.isabs(fileid):
+            raise ValueError(f"Absolute path blocked: {fileid}")
 
         joined = os.path.normpath(os.path.join(self._path, fileid))
         root = os.path.normpath(self._path)
 
-        # Enforce root boundary — must stay inside corpus root
+        # Lexical check (cheap, catches obvious cases)
         if not (joined == root or joined.startswith(root + os.sep)):
             raise ValueError(f"Escape outside root blocked: {joined}")
+
+        # Resolve symlinks and re-check containment
+        real_joined = os.path.realpath(joined)
+        real_root = os.path.realpath(self._path)
+        if not (real_joined == real_root or real_joined.startswith(real_root + os.sep)):
+            raise ValueError(
+                f"Symlink escape blocked: {fileid!r} resolves to "
+                f"{real_joined!r} outside root {real_root!r}"
+            )
 
         return FileSystemPathPointer(joined)
 

@@ -187,6 +187,23 @@ pytest unit/translate/test_nist.py  # unittest
 pytest                     # all tests
 ```
 
+If your PR only touches a single module, you can run just the relevant test
+file directly with `python -m unittest` without needing pytest:
+
+```bash
+# Run a specific test file
+python -m unittest nltk.test.unit.test_tokenize
+
+# Run a specific test class
+python -m unittest nltk.test.unit.test_tokenize.TestTreebankWordDetokenizer
+
+# Run a specific test method
+python -m unittest nltk.test.unit.test_tokenize.TestTreebankWordDetokenizer.test_contractions
+```
+
+This is faster than running the full test suite and useful for quick
+iteration during development.
+
 
 ## Continuous Integration
 

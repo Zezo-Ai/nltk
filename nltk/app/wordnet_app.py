@@ -793,7 +793,9 @@ def page_from_reference(href):
                 except KeyError:
                     pass
     if not body:
-        body = "The word or words '%s' were not found in the dictionary." % word
+        body = "The word or words '%s' were not found in the dictionary." % html.escape(
+            word
+        )
     return body, word
 
 

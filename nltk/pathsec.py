@@ -6,6 +6,7 @@
 # For license information, see LICENSE.TXT
 #
 """Centralized I/O security sentinel for NLTK."""
+
 import builtins
 import ipaddress
 import os
@@ -23,6 +24,7 @@ ENFORCE = False
 
 _ALLOWED_ROOTS_CACHE = None
 _LAST_DATA_PATHS = None
+
 
 def _get_allowed_roots():
     global _ALLOWED_ROOTS_CACHE, _LAST_DATA_PATHS
@@ -51,12 +53,14 @@ def _get_allowed_roots():
     # Trust the NLTK library directory for internal .map/.tab files
     try:
         import nltk
+
         roots.add(Path(nltk.__file__).parent.resolve())
     except:
         pass
 
     # Trust standard data locations and the system TEMP directory
     import tempfile
+
     for loc in ["~/nltk_data", "/usr/share/nltk_data", tempfile.gettempdir()]:
         try:
             p = Path(loc).expanduser().resolve()
@@ -68,6 +72,7 @@ def _get_allowed_roots():
     _ALLOWED_ROOTS_CACHE = roots
     _LAST_DATA_PATHS = current_state
     return roots
+
 
 def validate_path(path_input, context="NLTK"):
     if isinstance(path_input, int) or not path_input or not str(path_input).strip():
@@ -93,7 +98,10 @@ def validate_path(path_input, context="NLTK"):
         target = Path(raw).resolve()
 
         # 4. Containment Check
-        if any(target == root or target.is_relative_to(root) for root in _get_allowed_roots()):
+        if any(
+            target == root or target.is_relative_to(root)
+            for root in _get_allowed_roots()
+        ):
             return
 
         # 5. CWD Fallback (Safety Valve)
@@ -121,24 +129,32 @@ def validate_path(path_input, context="NLTK"):
         if ENFORCE:
             raise PermissionError(f"Path validation failed [{context}]: {e}") from e
 
-def validate_zip_archive(zip_obj_or_path, target_root, specific_member=None, context="ZipAudit"):
+
+def validate_zip_archive(
+    zip_obj_or_path, target_root, specific_member=None, context="ZipAudit"
+):
     """Enhanced Zip-Slip protection with null-byte detection."""
     try:
         target = Path(target_root).resolve()
         target_str = str(target)
 
         def _audit(zf):
-            members_to_check = [specific_member] if specific_member is not None else zf.namelist()
+            members_to_check = (
+                [specific_member] if specific_member is not None else zf.namelist()
+            )
             for name in members_to_check:
                 name_str = name.filename if hasattr(name, "filename") else str(name)
-                
+
                 # Null-byte protection (from upstream)
                 if "\0" in name_str:
                     raise ValueError(f"Null byte in ZIP member: {name_str}")
 
                 # Path traversal check
                 member_path_str = os.path.abspath(os.path.join(target_str, name_str))
-                if not member_path_str.startswith(target_str + os.sep) and member_path_str != target_str:
+                if (
+                    not member_path_str.startswith(target_str + os.sep)
+                    and member_path_str != target_str
+                ):
                     msg = f"Security Violation [{context}]: Traversal member '{name_str}' detected."
                     if ENFORCE:
                         raise PermissionError(msg)
@@ -155,6 +171,7 @@ def validate_zip_archive(zip_obj_or_path, target_root, specific_member=None, con
     except (OSError, zipfile.BadZipFile) as e:
         if ENFORCE:
             raise PermissionError(f"Zip validation failed [{context}]: {e}") from e
+
 
 def validate_network_url(url_input, context="NetworkIO"):
     """Hardened URL validation with SSRF protection and timeouts."""
@@ -188,7 +205,12 @@ def validate_network_url(url_input, context="NetworkIO"):
                 ip_obj = ipaddress.ip_address(ip_str)
 
                 # Block loopback, link-local, multicast, and private ranges
-                if ip_obj.is_loopback or ip_obj.is_link_local or ip_obj.is_multicast or ip_obj.is_private:
+                if (
+                    ip_obj.is_loopback
+                    or ip_obj.is_link_local
+                    or ip_obj.is_multicast
+                    or ip_obj.is_private
+                ):
                     msg = f"Security Violation [{context}]: Blocked SSRF attempt to {ip_str} ({hostname})"
                     if ENFORCE:
                         raise PermissionError(msg)
@@ -198,7 +220,9 @@ def validate_network_url(url_input, context="NetworkIO"):
             pass
         except socket.timeout:
             if ENFORCE:
-                raise PermissionError(f"Security Violation [{context}]: DNS resolution timed out for {hostname}")
+                raise PermissionError(
+                    f"Security Violation [{context}]: DNS resolution timed out for {hostname}"
+                )
 
     except PermissionError:
         raise
@@ -206,9 +230,11 @@ def validate_network_url(url_input, context="NetworkIO"):
         if ENFORCE:
             raise PermissionError(f"URL validation failed [{context}]: {e}") from e
 
+
 def open(file, mode="r", **kwargs):
     validate_path(file, context="pathsec.open")
     return builtins.open(file, mode=mode, **kwargs)
+
 
 def urlopen(url, *args, **kwargs):
     validate_network_url(
@@ -217,6 +243,7 @@ def urlopen(url, *args, **kwargs):
     )
     return _original_urlopen(url, *args, **kwargs)
 
+
 class ZipFile(zipfile.ZipFile):
     def __init__(self, file, *args, **kwargs):
         if isinstance(file, (str, Path)):
@@ -224,12 +251,20 @@ class ZipFile(zipfile.ZipFile):
         super().__init__(file, *args, **kwargs)
 
     def extract(self, member, path=None, pwd=None):
-        validate_zip_archive(self, path or os.getcwd(), specific_member=member, context="pathsec.ZipFile.extract")
+        validate_zip_archive(
+            self,
+            path or os.getcwd(),
+            specific_member=member,
+            context="pathsec.ZipFile.extract",
+        )
         return super().extract(member, path, pwd)
 
     def extractall(self, path=None, members=None, pwd=None):
-        validate_zip_archive(self, path or os.getcwd(), context="pathsec.ZipFile.extractall")
+        validate_zip_archive(
+            self, path or os.getcwd(), context="pathsec.ZipFile.extractall"
+        )
         super().extractall(path, members, pwd)
+
 
 __all__ = [
     "validate_path",

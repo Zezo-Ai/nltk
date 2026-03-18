@@ -378,12 +378,34 @@ class FileSystemPathPointer(PathPointer, str):
         """The absolute path identified by this path pointer."""
         return self._path
 
+    def _check_containment(self, resolved_path):
+        """Unconditionally verify resolved_path is within allowed NLTK data roots.
+
+        This check always raises on violation regardless of pathsec.ENFORCE,
+        because FileSystemPathPointer is the trust boundary for corpus readers.
+        Fixes GHSA-72r2-7mfr-5xr9 and GHSA-r6gq-whwq-mvg9.
+        """
+        import nltk.data as _d
+
+        allowed = [os.path.realpath(os.path.abspath(p)) for p in _d.path if p]
+        if not allowed:
+            return  # No data paths configured yet
+        resolved = os.path.realpath(os.path.abspath(resolved_path))
+        if not any(
+            resolved == root or resolved.startswith(root + os.sep) for root in allowed
+        ):
+            raise ValueError(
+                f"Access outside NLTK data directories blocked: {resolved_path!r}"
+            )
+
     def open(self, encoding=None):
         """
-        Secure open — prevents absolute direct access outside pointer root.
-        Path validation is enforced by pathsec.open() which checks the
-        resolved path against allowed NLTK data roots.
+        Open the file identified by this path pointer.
+
+        Unconditionally checks that the resolved path (after symlink
+        resolution) is within an allowed NLTK data directory.
         """
+        self._check_containment(self._path)
         stream = _secure_open(self._path, "rb")
         if encoding is not None:
             stream = SeekableUnicodeStreamReader(stream, encoding)
@@ -394,20 +416,35 @@ class FileSystemPathPointer(PathPointer, str):
 
     def join(self, fileid):
         """
-        Harden join() to prevent traversal & ensure corpus-root sandbox.
+        Return a new path pointer for the given file relative to this root.
+
+        Prevents path traversal via ``..``, absolute paths, and symlink
+        escapes by resolving the joined path and checking containment
+        within the corpus root.
         """
         fileid = str(fileid).replace("\\", "/")
 
-        # Block ../ traversal
+        # Block ../ traversal and absolute paths
         if ".." in fileid.split("/"):
             raise ValueError(f"Traversal blocked: {fileid}")
+        if os.path.isabs(fileid):
+            raise ValueError(f"Absolute path blocked: {fileid}")
 
         joined = os.path.normpath(os.path.join(self._path, fileid))
         root = os.path.normpath(self._path)
 
-        # Enforce root boundary — must stay inside corpus root
+        # Lexical check first (cheap)
         if not (joined == root or joined.startswith(root + os.sep)):
             raise ValueError(f"Escape outside root blocked: {joined}")
+
+        # Resolve symlinks and re-check (fixes GHSA-r6gq-whwq-mvg9)
+        real_joined = os.path.realpath(joined)
+        real_root = os.path.realpath(self._path)
+        if not (real_joined == real_root or real_joined.startswith(real_root + os.sep)):
+            raise ValueError(
+                f"Symlink escape blocked: {fileid!r} resolves to "
+                f"{real_joined!r} outside root {real_root!r}"
+            )
 
         return FileSystemPathPointer(joined)
 

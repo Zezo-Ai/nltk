@@ -201,7 +201,21 @@ python -m unittest nltk.test.unit.test_tokenize.TestTreebankWordDetokenizer
 python -m unittest nltk.test.unit.test_tokenize.TestTreebankWordDetokenizer.test_contractions
 ```
 
-This is faster than running the full test suite and useful for quick
+If your PR touches a module that has doctests (inline `>>>` examples in
+docstrings), you can run just those doctests with `python -m doctest`:
+
+```bash
+# Run doctests for a single module
+python -m doctest nltk/metrics/distance.py
+
+# Run with verbose output to see each test
+python -m doctest -v nltk/metrics/distance.py
+
+# Run a specific doctest file from the test suite
+python -m doctest nltk/test/tokenize.doctest
+```
+
+These are faster than running the full test suite and useful for quick
 iteration during development.
 
 

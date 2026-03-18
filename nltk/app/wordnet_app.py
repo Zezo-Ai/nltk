@@ -238,8 +238,9 @@ def wnb(port=8000, runBrowser=True, logfilename=None):
         server_ready = threading.Event()
         browser_thread = startBrowser(url, server_ready)
 
-    # Start the server.
-    server = HTTPServer(("", port), MyServerHandler)
+    # Start the server. Bind to localhost only to prevent remote access
+    # and unauthenticated shutdown via /SHUTDOWN%20THE%20SERVER.
+    server = HTTPServer(("127.0.0.1", port), MyServerHandler)
     if logfile:
         logfile.write("NLTK Wordnet browser server running serving: %s\n" % url)
     if runBrowser:
@@ -793,7 +794,9 @@ def page_from_reference(href):
                 except KeyError:
                     pass
     if not body:
-        body = "The word or words '%s' were not found in the dictionary." % word
+        body = "The word or words '%s' were not found in the dictionary." % html.escape(
+            word
+        )
     return body, word
 
 

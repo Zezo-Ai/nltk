@@ -2,6 +2,9 @@ name: ci-workflow
 
 on: [push, pull_request, workflow_dispatch]
 
+permissions:
+  contents: read
+
 env:
   THIRD_PARTY_DIR: ${{ github.workspace }}/third
   CORENLP: ${{ github.workspace }}/third/stanford-corenlp

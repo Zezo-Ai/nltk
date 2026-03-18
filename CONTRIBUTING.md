@@ -5,6 +5,14 @@ Hi! Thanks for your interest in contributing to [NLTK](https://www.nltk.org/).
 In this document, we'll try to summarize everything that you need to know to
 do a good job.
 
+## Maintenance Mode
+
+NLTK is in maintenance mode. We welcome bugfixes.
+We can consider _minor_ enhancements if they are clearly documented in an [NLTK issue](https://github.com/nltk/nltk/issues)
+and are supported by a [team member](https://github.com/orgs/nltk/teams/team-nltk) who is willing to review a PR.
+(You are welcome to make a case for a _major_ enhancement, but please note we have limited capacity to deal with it.
+Please enlist an NLTK team member before doing substantial coding.)
+
 ## Code and Issues
 
 We use [GitHub](https://www.github.com/) to host our code repositories and

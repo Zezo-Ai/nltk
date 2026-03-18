@@ -540,7 +540,6 @@ def demo(text=None, similarity_method=BLOCK_COMPARISON):
     if text is None:
         text = brown.raw()[:10000]
     s, ss, d, b = tt.tokenize(text)
-    pylab.title(f"TextTiling {similarity_method} Similarity")
     pylab.xlabel("Sentence Gap index")
     pylab.ylabel("Gap Scores")
     pylab.plot(range(len(s)), s, label="Gap Scores")

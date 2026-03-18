@@ -134,9 +134,11 @@ def validate_path(path_input, context="NLTK"):
         else:
             warnings.warn(msg, RuntimeWarning, stacklevel=3)
 
-    except Exception:
+    except (PermissionError, ValueError):
+        raise
+    except (OSError, TypeError) as e:
         if ENFORCE:
-            raise
+            raise PermissionError(f"Path validation failed [{context}]: {e}") from e
 
 
 def validate_zip_archive(
@@ -175,9 +177,11 @@ def validate_zip_archive(
         else:
             with zipfile.ZipFile(zip_obj_or_path, "r") as zf:
                 _audit(zf)
-    except Exception:
+    except (PermissionError, ValueError):
+        raise
+    except (OSError, zipfile.BadZipFile) as e:
         if ENFORCE:
-            raise
+            raise PermissionError(f"Zip validation failed [{context}]: {e}") from e
 
 
 def validate_network_url(url_input, context="NetworkIO"):
@@ -199,9 +203,15 @@ def validate_network_url(url_input, context="NetworkIO"):
         if not hostname:
             return
 
-        # Use getaddrinfo to capture both IPv4 and IPv6 resolutions
+        # Use getaddrinfo to capture both IPv4 and IPv6 resolutions.
+        # Set a timeout to prevent hanging on slow/unresponsive DNS.
         try:
-            addr_info = socket.getaddrinfo(hostname, None)
+            old_timeout = socket.getdefaulttimeout()
+            socket.setdefaulttimeout(5)
+            try:
+                addr_info = socket.getaddrinfo(hostname, None)
+            finally:
+                socket.setdefaulttimeout(old_timeout)
             for result in addr_info:
                 ip_str = result[4][0]
                 ip_obj = ipaddress.ip_address(ip_str)
@@ -220,10 +230,17 @@ def validate_network_url(url_input, context="NetworkIO"):
                         warnings.warn(msg, RuntimeWarning, stacklevel=3)
         except (socket.gaierror, ValueError):
             pass
+        except socket.timeout:
+            if ENFORCE:
+                raise PermissionError(
+                    f"Security Violation [{context}]: DNS resolution timed out for {hostname}"
+                )
 
-    except Exception:
+    except PermissionError:
+        raise
+    except (OSError, ValueError) as e:
         if ENFORCE:
-            raise
+            raise PermissionError(f"URL validation failed [{context}]: {e}") from e
 
 
 # --- CENTRALIZED I/O WRAPPERS ---

@@ -46,7 +46,7 @@ def _get_allowed_roots():
             try:
                 raw_p = p.path if hasattr(p, "path") else p
                 roots.add(Path(str(raw_p)).resolve())
-            except:
+            except Exception:
                 continue
 
     import tempfile
@@ -56,7 +56,7 @@ def _get_allowed_roots():
             p = Path(loc).expanduser().resolve()
             if p.exists():
                 roots.add(p)
-        except:
+        except Exception:
             continue
 
     _ALLOWED_ROOTS_CACHE = roots
@@ -78,10 +78,6 @@ def validate_path(path_input, context="NLTK"):
             if parsed.scheme == "file":
                 raw = unquote(parsed.path)
 
-        lower_raw = raw.lower()
-        if ".zip" in lower_raw:
-            zip_idx = lower_raw.find(".zip") + 4
-            raw = raw[:zip_idx]
 
         target = Path(raw).resolve()
 
@@ -132,6 +128,10 @@ def validate_zip_archive(
     try:
         target = Path(target_root).resolve()
         target_str = str(target)
+        # Normalize target paths for cross-platform, case-insensitive comparison
+        target_norm_eq = os.path.normcase(target_str)
+        # Ensure trailing separator for prefix check (e.g., 'C:\\data\\')
+        target_norm_prefix = os.path.normcase(os.path.join(target_str, ""))
 
         def _audit(zf):
             members_to_check = (
@@ -142,9 +142,10 @@ def validate_zip_archive(
                 if "\0" in name_str:
                     raise ValueError(f"Null byte in ZIP member: {name_str}")
                 member_path_str = os.path.abspath(os.path.join(target_str, name_str))
-                if (
-                    not member_path_str.startswith(target_str + os.sep)
-                    and member_path_str != target_str
+                member_norm = os.path.normcase(member_path_str)
+                if not (
+                    member_norm.startswith(target_norm_prefix)
+                    or member_norm == target_norm_eq
                 ):
                     msg = f"Security Violation [{context}]: Traversal member '{name_str}' detected."
                     if ENFORCE:
@@ -169,7 +170,7 @@ def _resolve_hostname(hostname):
     """Cached hostname resolution to mitigate DNS rebinding (Copilot Medium)."""
     try:
         return socket.getaddrinfo(hostname, None, proto=socket.IPPROTO_TCP)
-    except:
+    except Exception:
         return []
 
 

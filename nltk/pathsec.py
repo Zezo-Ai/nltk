@@ -77,7 +77,7 @@ def validate_path(path_input, context="NLTK"):
             if parsed.scheme in ("http", "https", "ftp"):
                 return
             if parsed.scheme == "file":
-                raw = unquote(parsed.path)
+                raw = urllib.request.url2pathname(parsed.path)
 
         target = Path(raw).resolve()
 
@@ -183,7 +183,10 @@ def validate_network_url(url_input, context="NetworkIO"):
 
         # FIX: Cross-route file scheme to path validation (Copilot High)
         if parsed.scheme == "file":
-            validate_path(unquote(parsed.path), context=f"{context}.file_scheme")
+            validate_path(
+                urllib.request.url2pathname(parsed.path),
+                context=f"{context}.file_scheme",
+            )
             return
 
         if parsed.scheme not in ("http", "https"):
@@ -223,8 +226,10 @@ def urlopen(url, *args, **kwargs):
     """Secure wrapper for urllib.request.urlopen with redirect validation."""
     url_str = url.full_url if hasattr(url, "full_url") else str(url)
     validate_network_url(url_str, context="pathsec.urlopen")
-    opener = urllib.request.build_opener(_ValidatingRedirectHandler())
-    return opener.open(url, *args, **kwargs)
+    urllib.request.install_opener(
+        urllib.request.build_opener(_ValidatingRedirectHandler())
+    )
+    return urllib.request.urlopen(url, *args, **kwargs)
 
 
 def open(file, mode="r", **kwargs):

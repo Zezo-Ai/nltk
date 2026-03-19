@@ -90,11 +90,14 @@ def test_path_traversal_absolute():
     try:
         from nltk.pathsec import open as target_open
     except ImportError:
-        # On vulnerable branches without pathsec, default to standard open
         target_open = builtins.open
 
+    # Cross-platform absolute path guaranteed outside all allowed roots.
+    # Linux/macOS: /_nltk_pathsec_test/secret.txt
+    # Windows:     C:\_nltk_pathsec_test\secret.txt
+    outside = os.path.join(os.path.abspath(os.sep), "_nltk_pathsec_test", "secret.txt")
     with pytest.raises((ValueError, PermissionError)):
-        target_open("/etc/passwd", "r")
+        target_open(outside, "r")
 
 
 # --- ZIP-SLIP TESTS ---

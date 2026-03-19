@@ -6,6 +6,7 @@
 # For license information, see LICENSE.TXT
 #
 """Centralized I/O security sentinel for NLTK."""
+
 import builtins
 import ipaddress
 import os
@@ -77,7 +78,6 @@ def validate_path(path_input, context="NLTK"):
                 return
             if parsed.scheme == "file":
                 raw = unquote(parsed.path)
-
 
         target = Path(raw).resolve()
 

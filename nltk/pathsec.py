@@ -218,18 +218,26 @@ class _ValidatingRedirectHandler(urllib.request.HTTPRedirectHandler):
     """Ensures that every step of a redirect chain is re-validated against SSRF (Copilot High)."""
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):
-        validate_network_url(newurl, context="NetworkRedirect")
+        validate_network_url(newurl, context="pathsec.urlopen.redirect")
         return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+_validating_opener = None
+
+
+def _get_validating_opener():
+    global _validating_opener
+    if _validating_opener is None:
+        _validating_opener = urllib.request.build_opener(_ValidatingRedirectHandler())
+    return _validating_opener
 
 
 def urlopen(url, *args, **kwargs):
     """Secure wrapper for urllib.request.urlopen with redirect validation."""
     url_str = url.full_url if hasattr(url, "full_url") else str(url)
     validate_network_url(url_str, context="pathsec.urlopen")
-    urllib.request.install_opener(
-        urllib.request.build_opener(_ValidatingRedirectHandler())
-    )
-    return urllib.request.urlopen(url, *args, **kwargs)
+    opener = _get_validating_opener()
+    return opener.open(url, *args, **kwargs)
 
 
 def open(file, mode="r", **kwargs):

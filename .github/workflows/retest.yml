@@ -18,6 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       actions: write
+      issues: write
       pull-requests: read
     steps:
       - name: Get PR head info

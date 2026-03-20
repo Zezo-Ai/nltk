@@ -238,7 +238,7 @@ class TestTokenize:
         ],
     )
     def test_tweet_tokenizer_expanded(
-        self, test_input: str, expecteds: Tuple[List[str], List[str]]
+        self, test_input: str, expecteds: tuple[list[str], list[str]]
     ):
         """
         Test `match_phone_numbers` in TweetTokenizer.
@@ -922,7 +922,7 @@ class TestTokenize:
             ("Hello.\tThere", ["Hello.", "There"]),
         ],
     )
-    def test_sent_tokenize(self, sentences: str, expected: List[str]):
+    def test_sent_tokenize(self, sentences: str, expected: list[str]):
         assert sent_tokenize(sentences) == expected
 
     def test_string_tokenizer(self) -> None:

@@ -6,9 +6,10 @@ on:
 
 jobs:
   retest:
-    # Only run on PR comments (not issue comments) containing /retest or [ci: retest]
+    # Only org members/collaborators can trigger retest on PR comments
     if: >
       github.event.issue.pull_request &&
+      contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association) &&
       (
         contains(github.event.comment.body, '/retest') ||
         contains(github.event.comment.body, '[CI: retest]') ||

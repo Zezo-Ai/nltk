@@ -219,6 +219,27 @@ def re_show(regexp, string, left="{", right="}"):
 
 # recipe from David Mertz
 def filestring(f, allowed_dir=None):
+    """
+    Read a file path or file-like object into a string.
+
+    Security:
+    - Paths are resolved via ``Path.resolve()`` to prevent
+      symlink and ``../`` traversal attacks.
+    - If ``allowed_dir`` is provided, the resolved path must
+      fall within that directory tree.
+    - All file opens go through ``pathsec.open``, which
+      validates paths against NLTK's allowed data roots.
+    - File-like objects with a ``.read()`` method are passed
+      through without path checks.
+
+    :param f: a file path or file-like object with a ``.read()`` method
+    :param allowed_dir: if provided, restricts file access to paths
+        within this directory; raises ``PermissionError`` if the
+        resolved path falls outside it
+    :raises PermissionError: if ``allowed_dir`` is set and ``f``
+        resolves outside it, or if pathsec blocks the path
+    :rtype: str
+    """
     if hasattr(f, "read"):
         return f.read()
     elif isinstance(f, str):

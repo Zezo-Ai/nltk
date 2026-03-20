@@ -103,7 +103,7 @@ class TestEditDistance:
         ],
     )
     def test_with_transpositions(
-        self, left: str, right: str, substitution_cost: int, expecteds: Tuple[int, int]
+        self, left: str, right: str, substitution_cost: int, expecteds: tuple[int, int]
     ):
         """
         Test `edit_distance` between two strings, given some `substitution_cost`,

@@ -221,21 +221,27 @@ class CorpusReader:
 
     def open(self, file):
         """
-        Return an open stream that can be used to read the given file.
+        Return an open stream for the given file.
+        Security patched: prevents path traversal and scoped escapes.
         """
-        # -------- SECURITY PATCH START --------
-        file = str(file)
+        # Layer 1: Lexical guard
+        if os.path.isabs(file) or ".." in file.replace("\\", "/"):
+            raise ValueError(f"CorpusReader paths must be relative: {file}")
 
-        if os.path.isabs(file):
-            raise ValueError("Absolute paths are not allowed")
+        path = self._root.join(file)
 
-        if ".." in file.replace("\\", "/").split("/"):
-            raise ValueError("Path traversal attempt blocked")
-        # -------- SECURITY PATCH END --------
+        # Layer 2: Scoped resolved guard (Fixes symlink escape test)
+        from nltk.pathsec import validate_path
 
-        encoding = self.encoding(file)
-        stream = self._root.join(file).open(encoding)
-        return stream
+        validate_path(path, context="CorpusReader", required_root=self._root)
+
+        # --- FIX: Handle dict-based encodings (e.g., UDHR corpus) ---
+        encoding = self._encoding
+        if isinstance(encoding, dict):
+            encoding = encoding.get(file)
+
+        # Layer 3: Global sentinel check happens inside path.open()
+        return path.open(encoding=encoding)
 
     def encoding(self, file):
         """

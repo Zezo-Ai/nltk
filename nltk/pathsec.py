@@ -7,6 +7,7 @@
 #
 """Centralized I/O security sentinel for NLTK."""
 
+"""Centralized I/O security sentinel for NLTK."""
 import builtins
 import ipaddress
 import os
@@ -32,6 +33,7 @@ def _get_allowed_roots():
 
     current_paths = []
     if "nltk.data" in sys.modules:
+        # Accessing nltk.data.path via sys.modules to avoid top-level circularity
         current_paths = list(getattr(sys.modules["nltk.data"], "path", []))
 
     env_paths = os.environ.get("NLTK_DATA", "")
@@ -41,13 +43,13 @@ def _get_allowed_roots():
         return _ALLOWED_ROOTS_CACHE
 
     roots = set()
-    # FIX: Use os.pathsep for environment variables (Copilot High)
     for p in current_paths + env_paths.split(os.pathsep):
         if p:
             try:
+                # Handle both string paths and PathPointer objects
                 raw_p = p.path if hasattr(p, "path") else p
                 roots.add(Path(str(raw_p)).resolve())
-            except Exception:
+            except (OSError, ValueError, RuntimeError):
                 continue
 
     import tempfile
@@ -57,7 +59,7 @@ def _get_allowed_roots():
             p = Path(loc).expanduser().resolve()
             if p.exists():
                 roots.add(p)
-        except Exception:
+        except (OSError, ValueError, RuntimeError):
             continue
 
     _ALLOWED_ROOTS_CACHE = roots
@@ -65,8 +67,15 @@ def _get_allowed_roots():
     return roots
 
 
-def validate_path(path_input, context="NLTK"):
-    """Ensures file access is restricted to allowed data directories."""
+def validate_path(path_input, context="NLTK", required_root=None):
+    """
+    Ensures file access is restricted to allowed data directories.
+
+    :param path_input: The path to validate.
+    :param context: Diagnostic context for warnings/errors.
+    :param required_root: If provided, enforces that the path is strictly
+                          within this specific directory (scoped sandbox).
+    """
     if isinstance(path_input, int) or not path_input or not str(path_input).strip():
         return
     try:
@@ -77,26 +86,50 @@ def validate_path(path_input, context="NLTK"):
             if parsed.scheme in ("http", "https", "ftp"):
                 return
             if parsed.scheme == "file":
-                raw = urllib.request.url2pathname(parsed.path)
+                raw = unquote(parsed.path)
 
-        target = Path(raw).resolve()
+        # Resolve path to catch symlink escapes
+        try:
+            target = Path(raw).resolve()
+        except (OSError, ValueError):
+            # Fallback for virtual paths inside ZIPs (e.g. corpora/foo.zip/file.txt)
+            lower_raw = raw.lower()
+            if ".zip" in lower_raw:
+                zip_idx = lower_raw.find(".zip") + 4
+                target = Path(raw[:zip_idx]).resolve()
+            else:
+                target = Path(raw)
 
+        # LAYER 1: Scoped Sandbox (PR #3528 Integration)
+        # This resolves both target and root to block symlink-based escapes.
+        if required_root:
+            root_raw = (
+                required_root.path
+                if hasattr(required_root, "path")
+                else str(required_root)
+            )
+            scoped_root = Path(root_raw).resolve()
+            if not (target == scoped_root or target.is_relative_to(scoped_root)):
+                # Raise ValueError to match NLTK's historical CorpusReader error type
+                raise ValueError(
+                    f"Security Violation [{context}]: Path {target} escapes root {scoped_root}"
+                )
+
+        # LAYER 2: Global NLTK_DATA Sandbox
         allowed_roots = _get_allowed_roots()
         if any(target == root or target.is_relative_to(root) for root in allowed_roots):
             return
 
-        # 5. CWD Fallback (Explicit Opt-In for ENFORCE mode)
+        # CWD Fallback (Explicit Opt-In for ENFORCE mode)
         try:
             cwd = Path(os.getcwd()).resolve()
             if target == cwd or target.is_relative_to(cwd):
                 if any(cwd == root for root in allowed_roots):
                     return
-
                 msg = (
-                    f"Security Violation [{context}]: CWD access is restricted in ENFORCE mode. "
-                    "To allow local data, use: nltk.data.path.append('.')"
+                    f"Security Violation [{context}]: CWD access restricted in ENFORCE mode. "
+                    "Authorize via: nltk.data.path.append('.')"
                 )
-
                 if ENFORCE:
                     raise PermissionError(msg)
                 else:
@@ -106,7 +139,7 @@ def validate_path(path_input, context="NLTK"):
                         stacklevel=3,
                     )
                     return
-        except Exception:
+        except (OSError, ValueError):
             pass
 
         msg = f"Security Violation [{context}]: Unauthorized path {target}"
@@ -116,37 +149,29 @@ def validate_path(path_input, context="NLTK"):
             warnings.warn(msg, RuntimeWarning, stacklevel=3)
     except (PermissionError, ValueError):
         raise
-    except Exception as e:
+    except Exception:
         if ENFORCE:
-            raise PermissionError(f"Path validation failed [{context}]: {e}")
+            raise
 
 
 def validate_zip_archive(
     zip_obj_or_path, target_root, specific_member=None, context="ZipAudit"
 ):
-    """Enhanced Zip-Slip protection with null-byte detection."""
+    """Enhanced Zip-Slip protection using Pathlib for cross-platform safety."""
     try:
         target = Path(target_root).resolve()
-        target_str = str(target)
-        # Normalize target paths for cross-platform, case-insensitive comparison
-        target_norm_eq = os.path.normcase(target_str)
-        # Ensure trailing separator for prefix check (e.g., 'C:\\data\\')
-        target_norm_prefix = os.path.normcase(os.path.join(target_str, ""))
 
         def _audit(zf):
-            members_to_check = (
+            members = (
                 [specific_member] if specific_member is not None else zf.namelist()
             )
-            for name in members_to_check:
+            for name in members:
                 name_str = name.filename if hasattr(name, "filename") else str(name)
                 if "\0" in name_str:
                     raise ValueError(f"Null byte in ZIP member: {name_str}")
-                member_path_str = os.path.abspath(os.path.join(target_str, name_str))
-                member_norm = os.path.normcase(member_path_str)
-                if not (
-                    member_norm.startswith(target_norm_prefix)
-                    or member_norm == target_norm_eq
-                ):
+
+                member_path = (target / name_str).resolve()
+                if not (member_path == target or member_path.is_relative_to(target)):
                     msg = f"Security Violation [{context}]: Traversal member '{name_str}' detected."
                     if ENFORCE:
                         raise PermissionError(msg)
@@ -160,17 +185,17 @@ def validate_zip_archive(
                 _audit(zf)
     except (PermissionError, ValueError):
         raise
-    except (OSError, zipfile.BadZipFile) as e:
+    except (OSError, zipfile.BadZipFile):
         if ENFORCE:
-            raise PermissionError(f"Zip validation failed [{context}]: {e}") from e
+            raise PermissionError("Zip validation failed")
 
 
 @lru_cache(maxsize=256)
 def _resolve_hostname(hostname):
-    """Cached hostname resolution to mitigate DNS rebinding (Copilot Medium)."""
+    """Cached hostname resolution to mitigate DNS rebinding."""
     try:
         return socket.getaddrinfo(hostname, None, proto=socket.IPPROTO_TCP)
-    except Exception:
+    except (OSError, ValueError):
         return []
 
 
@@ -180,13 +205,8 @@ def validate_network_url(url_input, context="NetworkIO"):
         return
     try:
         parsed = urlparse(str(url_input))
-
-        # FIX: Cross-route file scheme to path validation (Copilot High)
         if parsed.scheme == "file":
-            validate_path(
-                urllib.request.url2pathname(parsed.path),
-                context=f"{context}.file_scheme",
-            )
+            validate_path(unquote(parsed.path), context=f"{context}.file_scheme")
             return
 
         if parsed.scheme not in ("http", "https"):
@@ -202,41 +222,31 @@ def validate_network_url(url_input, context="NetworkIO"):
         for result in _resolve_hostname(parsed.hostname or ""):
             ip = ipaddress.ip_address(result[4][0])
             if ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_private:
-                msg = f"Security Violation [{context}]: Blocked SSRF attempt to restricted IP {ip}"
+                msg = f"Security Violation [{context}]: SSRF attempt to restricted IP {ip}"
                 if ENFORCE:
                     raise PermissionError(msg)
                 else:
                     warnings.warn(msg, RuntimeWarning, stacklevel=3)
     except (PermissionError, ValueError):
         raise
-    except Exception as e:
+    except Exception:
         if ENFORCE:
-            raise PermissionError(f"URL validation failed [{context}]: {e}")
+            raise
 
 
 class _ValidatingRedirectHandler(urllib.request.HTTPRedirectHandler):
-    """Ensures that every step of a redirect chain is re-validated against SSRF (Copilot High)."""
+    """Ensures that every step of a redirect chain is re-validated against SSRF."""
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):
-        validate_network_url(newurl, context="pathsec.urlopen.redirect")
+        validate_network_url(newurl, context="NetworkRedirect")
         return super().redirect_request(req, fp, code, msg, headers, newurl)
-
-
-_validating_opener = None
-
-
-def _get_validating_opener():
-    global _validating_opener
-    if _validating_opener is None:
-        _validating_opener = urllib.request.build_opener(_ValidatingRedirectHandler())
-    return _validating_opener
 
 
 def urlopen(url, *args, **kwargs):
     """Secure wrapper for urllib.request.urlopen with redirect validation."""
     url_str = url.full_url if hasattr(url, "full_url") else str(url)
     validate_network_url(url_str, context="pathsec.urlopen")
-    opener = _get_validating_opener()
+    opener = urllib.request.build_opener(_ValidatingRedirectHandler())
     return opener.open(url, *args, **kwargs)
 
 
@@ -255,18 +265,11 @@ class ZipFile(zipfile.ZipFile):
         super().__init__(file, *args, **kwargs)
 
     def extract(self, member, path=None, pwd=None):
-        validate_zip_archive(
-            self,
-            path or os.getcwd(),
-            specific_member=member,
-            context="pathsec.ZipFile.extract",
-        )
+        validate_zip_archive(self, path or os.getcwd(), specific_member=member)
         return super().extract(member, path, pwd)
 
     def extractall(self, path=None, members=None, pwd=None):
-        validate_zip_archive(
-            self, path or os.getcwd(), context="pathsec.ZipFile.extractall"
-        )
+        validate_zip_archive(self, path or os.getcwd())
         super().extractall(path, members, pwd)
 
 

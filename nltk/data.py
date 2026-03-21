@@ -1122,18 +1122,20 @@ def _open(resource_url):
     protocol, path_ = resource_url.split(":", 1)
 
     if protocol == "nltk":
+        # If find() or .open() raises a ValueError (security) or LookupError,
+        # let it bubble up or handle it based on load() logic.
         return find(path_).open()
     elif protocol == "file":
-        import urllib.request
-
-        local_path = urllib.request.url2pathname(path_)
+        local_path = url2pathname(path_)
         try:
+            # 1. Attempt to use NLTK's standard search paths (Safe/Normalized)
             return find(local_path).open()
-        except LookupError:
-            # FIX: Use _secure_open to ensure the sentinel validates
-            # paths that find() cannot resolve.
+        except (LookupError, ValueError):
+            # 2. Fallback for absolute paths (e.g., file:///etc/passwd)
+            # This ensures even direct file access hits the pathsec sentinel.
             return _secure_open(local_path, "rb")
     else:
+        # Network protocols (http, https, ftp)
         return _secure_urlopen(resource_url)
 
 

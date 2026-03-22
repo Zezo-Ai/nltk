@@ -39,12 +39,17 @@ import pickle
 import re
 import sys
 import textwrap
+import urllib.request
 import zipfile
 from abc import ABCMeta, abstractmethod
 from gzip import WRITE as GZ_WRITE
 from gzip import GzipFile
 from io import BytesIO, TextIOWrapper
-from urllib.request import url2pathname, urlopen
+from urllib.request import url2pathname
+
+from nltk.pathsec import ZipFile
+from nltk.pathsec import open as _secure_open
+from nltk.pathsec import urlopen as _secure_urlopen
 
 # Reject unsafe no-protocol paths: traversal segments, trailing '..', absolute paths,
 # backslashes, Windows drive letters. Use a raw-string pattern and do not anchor only
@@ -374,20 +379,13 @@ class FileSystemPathPointer(PathPointer, str):
         """The absolute path identified by this path pointer."""
         return self._path
 
-    # ==============================
-    # SECURITY PATCH ENFORCING SANDBOX
-    # ==============================
     def open(self, encoding=None):
         """
         Secure open — prevents absolute direct access outside pointer root.
+        Path validation is enforced by pathsec.open() which checks the
+        resolved path against allowed NLTK data roots.
         """
-        path = os.path.normpath(self._path)
-
-        # Block direct access when the path is a filesystem root (e.g. "/" or "C:\\").
-        if os.path.isabs(path) and os.path.dirname(path) == path:
-            raise ValueError(f"Direct absolute file access blocked: {path}")
-
-        stream = open(self._path, "rb")
+        stream = _secure_open(self._path, "rb")
         if encoding is not None:
             stream = SeekableUnicodeStreamReader(stream, encoding)
         return stream
@@ -499,7 +497,7 @@ class ZipFilePathPointer(PathPointer):
     @property
     def zipfile(self):
         """
-        The zipfile.ZipFile object used to access the zip file
+        The ZipFile object used to access the zip file
         containing the entry identified by this path pointer.
         """
         return self._zipfile
@@ -1116,16 +1114,29 @@ def _open(resource_url):
         loaded from.  The default protocol is "nltk:", which searches
         for the file in the the NLTK data package.
     """
-    resource_url = normalize_resource_url(resource_url)
-    protocol, path_ = split_resource_url(resource_url)
+    # Restore "no protocol" handling for internal resilience
+    resource_url = str(resource_url)
+    if ":" not in resource_url:
+        resource_url = "nltk:" + resource_url
 
-    if protocol is None or protocol.lower() == "nltk":
-        return find(path_, path + [""]).open()
-    elif protocol.lower() == "file":
-        # urllib might not use mode='rb', so handle this one ourselves:
-        return find(path_, [""]).open()
+    protocol, path_ = resource_url.split(":", 1)
+
+    if protocol == "nltk":
+        # If find() or .open() raises a ValueError (security) or LookupError,
+        # let it bubble up or handle it based on load() logic.
+        return find(path_).open()
+    elif protocol == "file":
+        local_path = url2pathname(path_)
+        try:
+            # 1. Attempt to use NLTK's standard search paths (Safe/Normalized)
+            return find(local_path).open()
+        except (LookupError, ValueError):
+            # 2. Fallback for absolute paths (e.g., file:///etc/passwd)
+            # This ensures even direct file access hits the pathsec sentinel.
+            return _secure_open(local_path, "rb")
     else:
-        return urlopen(resource_url)
+        # Network protocols (http, https, ftp)
+        return _secure_urlopen(resource_url)
 
 
 ######################################################################
@@ -1164,9 +1175,9 @@ class LazyLoader:
 ######################################################################
 
 
-class OpenOnDemandZipFile(zipfile.ZipFile):
+class OpenOnDemandZipFile(ZipFile):
     """
-    A subclass of ``zipfile.ZipFile`` that closes its file pointer
+    A subclass of ``ZipFile`` that closes its file pointer
     whenever it is not using it; and re-opens it when it needs to read
     data from the zipfile.  This is useful for reducing the number of
     open file handles when many zip files are being accessed at once.
@@ -1178,7 +1189,7 @@ class OpenOnDemandZipFile(zipfile.ZipFile):
     def __init__(self, filename):
         if not isinstance(filename, str):
             raise TypeError("ReopenableZipFile filename must be a string")
-        zipfile.ZipFile.__init__(self, filename)
+        ZipFile.__init__(self, filename)
         assert self.filename == filename
         self.close()
         # After closing a ZipFile object, the _fileRefCnt needs to be cleared
@@ -1187,12 +1198,11 @@ class OpenOnDemandZipFile(zipfile.ZipFile):
 
     def read(self, name):
         assert self.fp is None
-        self.fp = open(self.filename, "rb")
+        # This will be validated by pathsec.open
+        self.fp = _secure_open(self.filename, "rb")
         value = zipfile.ZipFile.read(self, name)
-        # Ensure that _fileRefCnt needs to be set for Python2and3 compatible code.
-        # Since we only opened one file here, we add 1.
-        self._fileRefCnt += 1
-        self.close()
+        self.fp.close()
+        self.fp = None
         return value
 
     def write(self, *args, **kwargs):

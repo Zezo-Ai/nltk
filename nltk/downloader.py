@@ -171,10 +171,10 @@ import warnings
 import zipfile
 from hashlib import md5, sha256
 from urllib.error import HTTPError, URLError
-from urllib.request import urlopen
 from xml.etree import ElementTree
 
 import nltk
+from nltk.pathsec import ZipFile, urlopen
 
 # urllib2 = nltk.internals.import_from_stdlib('urllib2')
 
@@ -2392,7 +2392,7 @@ def _unzip_iter(filename, root, verbose=True):
         sys.stdout.flush()
 
     try:
-        zf = zipfile.ZipFile(filename)
+        zf = ZipFile(filename)
     except Exception as e:
         yield ErrorMessage(filename, e)
         # Flush the "Unzipping ..." line here because the try/finally that
@@ -2593,7 +2593,7 @@ def _find_packages(root):
     ``(pkg_xml, zf, subdir)``, where:
       - ``pkg_xml`` is an ``ElementTree.Element`` holding the xml for a
         package
-      - ``zf`` is a ``zipfile.ZipFile`` for the package's contents.
+      - ``zf`` is a ``ZipFile`` for the package's contents.
       - ``subdir`` is the subdirectory (relative to ``root``) where
         the package was found (e.g. 'corpora' or 'grammars').
     """
@@ -2608,7 +2608,7 @@ def _find_packages(root):
                 xmlfilename = os.path.join(dirname, filename)
                 zipfilename = xmlfilename[:-4] + ".zip"
                 try:
-                    zf = zipfile.ZipFile(zipfilename)
+                    zf = ZipFile(zipfilename)
                 except Exception as e:
                     raise ValueError(f"Error reading file {zipfilename!r}!\n{e}") from e
                 try:

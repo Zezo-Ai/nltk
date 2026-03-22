@@ -620,8 +620,11 @@ def demo(corpus_root=None):
         demo('/path/to/childes/data-xml/Eng-USA/")
         """
         )
-        # corpus_root_http = urllib2.urlopen('https://childes.talkbank.org/data-xml/Eng-USA/Bates.zip')
-        # corpus_root_http_bates = zipfile.ZipFile(cStringIO.StringIO(corpus_root_http.read()))
+
+        # To test remote fetching securely, use the pathsec wrapper:
+        # from nltk.pathsec import urlopen, ZipFile
+        # corpus_root_http = urlopen('https://childes.talkbank.org/data-xml/Eng-USA/Bates.zip')
+        # corpus_root_http_bates = ZipFile(cStringIO.StringIO(corpus_root_http.read()))
         ##this fails
         # childes = CHILDESCorpusReader(corpus_root_http_bates,corpus_root_http_bates.namelist())
 

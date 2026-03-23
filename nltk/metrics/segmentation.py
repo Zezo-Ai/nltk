@@ -53,6 +53,19 @@ def windowdiff(seg1, seg2, k, boundary="1", weighted=False):
     (e.g. "0", "1"), where the specified boundary value is used to
     mark the edge of a segmentation.
 
+    From Pevzner & Hearst (2002), the WindowDiff metric is defined as::
+
+        WindowDiff(ref, hyp, k) =
+            1 / (N - k) * sum_{i=1}^{N-k} (
+                |b(ref, i, i+k) - b(hyp, i, i+k)| > 0
+            )
+
+    where ``b(seg, i, j)`` counts the number of boundaries in ``seg``
+    between positions ``i`` and ``j``, and ``N = len(seg)``.
+
+    The weighted variant sums the absolute differences instead
+    of thresholding at 1.
+
         >>> s1 = "000100000010"
         >>> s2 = "000010000100"
         >>> s3 = "100000010000"

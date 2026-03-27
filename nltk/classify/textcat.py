@@ -136,8 +136,19 @@ class TextCat:
         to the text and return its ISO 639-3 code"""
         self.last_distances = self.lang_dists(text)
 
-        return min(self.last_distances, key=self.last_distances.get)
-        #################################################')
+        if (
+            len(
+                [
+                    v
+                    for v in self.last_distances.values()
+                    if v == min(self.last_distances.values())
+                ]
+            )
+            == 1
+        ):
+            return min(self.last_distances, key=self.last_distances.get)
+        else:
+            return "Unknown"
 
 
 def demo():

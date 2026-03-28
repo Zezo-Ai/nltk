@@ -131,49 +131,88 @@ class TextCat:
 
         return distances
 
-    def guess_language(self, text):
+    def guess_language(self, text, return_all=False):
         """
-        Determines the language of the given text by computing the
-        out-of-place distance between the text's trigram profile and
-        each language profile. Returns the ISO 639-3 code of the best
-        matching language.
-
-        If there is a tie for the minimum distance (i.e., multiple languages
-        are equally likely), or the text cannot be classified, returns None.
+        Determines the most likely language(s) for the given text.
 
         Parameters
         ----------
         text : str
             The text whose language is to be identified.
+        return_all : bool, optional
+            If False (default), returns a single ISO 639-3 language code as a str,
+            or None if the language is ambiguous or cannot be determined.
+            If True, returns a list of all language codes sharing the minimal distance.
+            The list will have one element if there is a unique best match,
+            multiple elements for ties, or be empty if no language is found.
 
         Returns
         -------
-        str or None
-            The ISO 639-3 language code of the most likely language,
-            or None if no unique best language can be determined.
+        str or None, or list of str
+            If return_all is False:
+                - str: language code if unique minimum found
+                - None: if ambiguous or not classifiable
+            If return_all is True:
+                - list: possible language code(s), or empty list if not classifiable
 
         Examples
         --------
-        >>> tc = TextCat()
-        >>> print(tc.guess_language('Ceci est une phrase en français.'))
-        fra
-        >>> print(tc.guess_language(''))  # or a tied/ambiguous case
+        >>> from nltk.classify.textcat import TextCat
+        >>> cat = TextCat()
+        >>> print(cat.guess_language('The quick brown fox jumps over the lazy dog.'))
+        eng
+
+        A case with no information, returns None or an empty list:
+
+        >>> print(cat.guess_language('', return_all=True))
+        []
+        >>> print(cat.guess_language(''))
         None
+
+        A case where a single short input ties between Catalan and French:
+
+        >>> print(sorted(cat.guess_language('ent', return_all=True)))
+        ['cat', 'fra']
+
+        By default (`return_all=False`), in a tie, guess_language returns None:
+
+        >>> print(cat.guess_language('ent'))
+        None
+
+        Note: For short or generic inputs, or for closely related languages,
+        the classifier may return an unexpected language. For example,
+        the following is a perfectly grammatical English sentence, but may
+        be classified as Scots ('sco') due to profile similarity:
+
+        >>> print(cat.guess_language('This is a short English sentence.'))
+        sco
+
+        This behavior is not a bug, but an artifact of the underlying n-gram profiles.
+        The classifier should be used with sufficiently distinctive and longer text fragments
+        for best accuracy.
         """
         self.last_distances = self.lang_dists(text)
-        if (
-            len(
-                [
-                    v
-                    for v in self.last_distances.values()
-                    if v == min(self.last_distances.values())
-                ]
-            )
-            == 1
-        ):
-            return min(self.last_distances, key=self.last_distances.get)
-        else:
+        if not self.last_distances:
+            if return_all:
+                return []
             return None
+        min_dist = min(self.last_distances.values())
+        candidates = [
+            lang for lang, dist in self.last_distances.items() if dist == min_dist
+        ]
+        all_languages = list(self.last_distances.keys())
+
+        # Special case: all languages match equally (uninformative), return empty list/None
+        if len(candidates) == len(all_languages):
+            if return_all:
+                return []
+            return None
+
+        if return_all:
+            return candidates
+        if len(candidates) == 1:
+            return candidates[0]
+        return None
 
 
 def demo():

@@ -132,10 +132,35 @@ class TextCat:
         return distances
 
     def guess_language(self, text):
-        """Find the language with the min distance
-        to the text and return its ISO 639-3 code"""
-        self.last_distances = self.lang_dists(text)
+        """
+        Determines the language of the given text by computing the
+        out-of-place distance between the text's trigram profile and
+        each language profile. Returns the ISO 639-3 code of the best
+        matching language.
 
+        If there is a tie for the minimum distance (i.e., multiple languages
+        are equally likely), or the text cannot be classified, returns None.
+
+        Parameters
+        ----------
+        text : str
+            The text whose language is to be identified.
+
+        Returns
+        -------
+        str or None
+            The ISO 639-3 language code of the most likely language,
+            or None if no unique best language can be determined.
+
+        Examples
+        --------
+        >>> tc = TextCat()
+        >>> print(tc.guess_language('Ceci est une phrase en français.'))
+        fra
+        >>> print(tc.guess_language(''))  # or a tied/ambiguous case
+        None
+        """
+        self.last_distances = self.lang_dists(text)
         if (
             len(
                 [
@@ -148,7 +173,7 @@ class TextCat:
         ):
             return min(self.last_distances, key=self.last_distances.get)
         else:
-            return "Unknown"
+            return None
 
 
 def demo():

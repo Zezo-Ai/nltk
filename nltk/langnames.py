@@ -129,6 +129,8 @@ def inverse_dict(dic):
         return {val: key for (key, val) in dic.items()}
     else:
         warn("This dictionary has no bijective inverse mapping.")
+
+
 def q2tag(qcode):
     """
     Convert Wikidata Q-code to BCP-47 tag.

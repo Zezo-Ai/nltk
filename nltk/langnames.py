@@ -119,13 +119,16 @@ def tag2q(tag):
 
 
 def inverse_dict(dic):
-    """Return inverse mapping, but only if it is bijective"""
+    """
+    Return the inverse mapping of a dictionary if it is bijective.
+
+    If the input dictionary is bijective (i.e., all values are unique), returns a new dictionary
+    mapping values to keys. Otherwise, returns None and emits a warning.
+    """
     if len(dic.keys()) == len(set(dic.values())):
         return {val: key for (key, val) in dic.items()}
     else:
         warn("This dictionary has no bijective inverse mapping.")
-
-
 def q2tag(qcode):
     """
     Convert Wikidata Q-code to BCP-47 tag.
@@ -141,6 +144,8 @@ def q2tag(qcode):
         bcp47.load_wiki_q()  # Wikidata conversion table needs to be loaded explicitly
     if not hasattr(bcp47, "wiki_bcp47") or bcp47.wiki_bcp47 is None:
         bcp47.wiki_bcp47 = inverse_dict(bcp47.wiki_q)
+    if bcp47.wiki_bcp47 is None:
+        return None
     return bcp47.wiki_bcp47.get(qcode, None)
 
 

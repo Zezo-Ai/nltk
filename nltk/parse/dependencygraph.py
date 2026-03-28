@@ -1,6 +1,6 @@
 # Natural Language Toolkit: Dependency Grammars
 #
-# Copyright (C) 2001-2025 NLTK Project
+# Copyright (C) 2001-2026 NLTK Project
 # Author: Jason Narad <jason.narad@gmail.com>
 #         Steven Bird <stevenbird1@gmail.com> (modifications)
 #
@@ -575,7 +575,7 @@ def dot2img(dot_string, t="svg"):
                     input=bytes(dot_string, encoding="utf8"),
                 )
             return proc.stdout
-        except:
+        except Exception:
             raise Exception(
                 "Cannot create image representation by running dot from string: {}"
                 "".format(dot_string)

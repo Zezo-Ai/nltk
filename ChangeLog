@@ -1,4 +1,33 @@
-Version 3.9.2 2025-09-10
+Version 3.9.4 2026-03-24
+* Support Python 3.14
+* Fix bug in Levenshtein distance when substitution_cost > 2
+* Fix bug in Treebank detokeniser re quote ordering
+* Fix bug in Jaro similarity for empty strings
+* Several security enhancements
+* Fix GHSA-rf74-v2fm-23pw: unbounded recursion in JSONTaggedDecoder
+* Implement TextTiling vocabulary introduction method (Hearst 1997)
+* Fix ALINE feature matrix errors and add comprehensive tests
+* Support multiple VerbNet versions, fix longid/shortid regex for VerbNet ids
+* Let downloader fallback to md5 when sha256 is unavailable
+* Several other minor bugfixes and code cleanups
+
+Thanks to the following contributors to 3.9.4:
+Min-Yen Kan, Eric Kafe, Emily Voss, bowiechen, Hrudhai01,
+jancallewaert, Mr-Neutr0n, pollak.peter89, ylwango613, 
+
+Version 3.9.3 2026-02-21
+
+* Fix CVE-2025-14009: secure ZIP extraction in nltk.downloader (#3468)
+* Block path traversal/arbitrary reads in nltk.data for protocol-less refs (#3467)
+* Block path traversal/abs paths in corpus readers and FS pointers (#3479, #3480)
+* Validate external StanfordSegmenter JARs using SHA256 (#3477)
+* Add optional sandbox enforcement for filestring() (#3485)
+* Maintenance: downloader/zipped models, CI/tooling updates
+
+Thanks to the following contributors to 3.9.3:
+Chris Clauss, Eric Kafe, HyperPS, purificant, Shivansh-Game, Christopher Smith
+
+Version 3.9.2 2025-10-01
 
 * Update download checksums to use SHA256 in built index
 * Fix percentage escape in new-style string formatting

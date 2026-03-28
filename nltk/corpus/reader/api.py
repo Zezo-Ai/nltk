@@ -1,6 +1,6 @@
 # Natural Language Toolkit: API for Corpus Readers
 #
-# Copyright (C) 2001-2025 NLTK Project
+# Copyright (C) 2001-2026 NLTK Project
 # Author: Steven Bird <stevenbird1@gmail.com>
 #         Edward Loper <edloper@gmail.com>
 # URL: <https://www.nltk.org/>
@@ -221,15 +221,27 @@ class CorpusReader:
 
     def open(self, file):
         """
-        Return an open stream that can be used to read the given file.
-        If the file's encoding is not None, then the stream will
-        automatically decode the file's contents into unicode.
-
-        :param file: The file identifier of the file to read.
+        Return an open stream for the given file.
+        Security patched: prevents path traversal and scoped escapes.
         """
-        encoding = self.encoding(file)
-        stream = self._root.join(file).open(encoding)
-        return stream
+        # Layer 1: Lexical guard
+        if os.path.isabs(file) or ".." in file.replace("\\", "/"):
+            raise ValueError(f"CorpusReader paths must be relative: {file}")
+
+        path = self._root.join(file)
+
+        # Layer 2: Scoped resolved guard (Fixes symlink escape test)
+        from nltk.pathsec import validate_path
+
+        validate_path(path, context="CorpusReader", required_root=self._root)
+
+        # --- FIX: Handle dict-based encodings (e.g., UDHR corpus) ---
+        encoding = self._encoding
+        if isinstance(encoding, dict):
+            encoding = encoding.get(file)
+
+        # Layer 3: Global sentinel check happens inside path.open()
+        return path.open(encoding=encoding)
 
     def encoding(self, file):
         """

@@ -2,7 +2,7 @@
 #
 # Author: Dan Garrette <dhgarrette@gmail.com>
 #
-# Copyright (C) 2001-2025 NLTK Project
+# Copyright (C) 2001-2026 NLTK Project
 # URL: <https://www.nltk.org/>
 # For license information, see LICENSE.TXT
 
@@ -238,7 +238,7 @@ class GlueDict(dict):
                 end_inheritance = parts[0].index(")")
                 sem = parts[0][:start_inheritance].strip()
                 supertype = parts[0][start_inheritance + 1 : end_inheritance]
-            except:
+            except Exception:
                 sem = parts[0].strip()
                 supertype = None
 

@@ -1,6 +1,6 @@
 # CHILDES XML Corpus Reader
 
-# Copyright (C) 2001-2025 NLTK Project
+# Copyright (C) 2001-2026 NLTK Project
 # Author: Tomonori Nagano <tnagano@gc.cuny.edu>
 #         Alexis Dimitriadis <A.Dimitriadis@uu.nl>
 # URL: <https://www.nltk.org/>
@@ -393,7 +393,7 @@ class CHILDESCorpusReader(XMLCorpusReader):
                                 f".//{{{NS}}}mor/{{{NS}}}mw/{{{NS}}}mk"
                             )
                             word += "-" + xmlinfl.text
-                        except:
+                        except Exception:
                             pass
                         # if there is a suffix
                         try:
@@ -432,7 +432,7 @@ class CHILDESCorpusReader(XMLCorpusReader):
                                 )
                             else:
                                 suffixTag = xmlsuffixpos[0].text
-                        except:
+                        except Exception:
                             pass
                         if suffixTag:
                             tag += "~" + suffixTag
@@ -440,7 +440,7 @@ class CHILDESCorpusReader(XMLCorpusReader):
                     # relational
                     # the gold standard is stored in
                     # <mor></mor><mor type="trn"><gra type="grt">
-                    if relation == True:
+                    if relation:
                         for xmlstem_rel in xmlword.findall(
                             f".//{{{NS}}}mor/{{{NS}}}gra"
                         ):
@@ -494,7 +494,7 @@ class CHILDESCorpusReader(XMLCorpusReader):
                                         + "|"
                                         + xmlpost_rel.get("relation"),
                                     )
-                        except:
+                        except Exception:
                             pass
                     sents.append(word)
                 if sent or relation:
@@ -620,8 +620,11 @@ def demo(corpus_root=None):
         demo('/path/to/childes/data-xml/Eng-USA/")
         """
         )
-        # corpus_root_http = urllib2.urlopen('https://childes.talkbank.org/data-xml/Eng-USA/Bates.zip')
-        # corpus_root_http_bates = zipfile.ZipFile(cStringIO.StringIO(corpus_root_http.read()))
+
+        # To test remote fetching securely, use the pathsec wrapper:
+        # from nltk.pathsec import urlopen, ZipFile
+        # corpus_root_http = urlopen('https://childes.talkbank.org/data-xml/Eng-USA/Bates.zip')
+        # corpus_root_http_bates = ZipFile(cStringIO.StringIO(corpus_root_http.read()))
         ##this fails
         # childes = CHILDESCorpusReader(corpus_root_http_bates,corpus_root_http_bates.namelist())
 

@@ -1,6 +1,6 @@
 # Natural Language Toolkit: Concordance Application
 #
-# Copyright (C) 2001-2025 NLTK Project
+# Copyright (C) 2001-2026 NLTK Project
 # Author: Sumukh Ghodke <sghodke@csse.unimelb.edu.au>
 # URL: <https://www.nltk.org/>
 # For license information, see LICENSE.TXT
@@ -400,7 +400,7 @@ class ConcordanceSearchView:
             from tkinter.messagebox import Message
 
             Message(message=ABOUT, title=TITLE, parent=self.main_frame).show()
-        except:
+        except Exception:
             ShowText(self.top, TITLE, ABOUT)
 
     def _bind_event_handlers(self):

@@ -1,6 +1,6 @@
 # Natural Language Toolkit: Feature Structures
 #
-# Copyright (C) 2001-2025 NLTK Project
+# Copyright (C) 2001-2026 NLTK Project
 # Author: Edward Loper <edloper@gmail.com>,
 #         Rob Speer,
 #         Steven Bird <stevenbird1@gmail.com>
@@ -2700,7 +2700,7 @@ def interactive_demo(trace=False):
                     num = int(input) - 1
                     selected[i] = all_fstructs[num][1]
                     print()
-                except:
+                except Exception:
                     print("Bad sentence number")
                     continue
 

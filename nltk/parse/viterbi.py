@@ -1,6 +1,6 @@
 # Natural Language Toolkit: Viterbi Probabilistic Parser
 #
-# Copyright (C) 2001-2025 NLTK Project
+# Copyright (C) 2001-2026 NLTK Project
 # Author: Edward Loper <edloper@gmail.com>
 #         Steven Bird <stevenbird1@gmail.com>
 # URL: <https://www.nltk.org/>
@@ -397,7 +397,7 @@ def demo():
     try:
         snum = int(sys.stdin.readline().strip()) - 1
         sent, grammar = demos[snum]
-    except:
+    except Exception:
         print("Bad sentence number")
         return
 

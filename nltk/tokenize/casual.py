@@ -1,7 +1,7 @@
 #
 # Natural Language Toolkit: Twitter Tokenizer
 #
-# Copyright (C) 2001-2025 NLTK Project
+# Copyright (C) 2001-2026 NLTK Project
 # Author: Christopher Potts <cgpotts@stanford.edu>
 #         Ewan Klein <ewan@inf.ed.ac.uk> (modifications)
 #         Pierpaolo Pantone <> (modifications)
@@ -184,9 +184,9 @@ REGEXPS = (
     r"""[\w.+-]+@[\w-]+\.(?:[\w-]\.?)+[\w-]""",
     # Zero-Width-Joiner and Skin tone modifier emojis
     """.(?:
-        [\U0001F3FB-\U0001F3FF]?(?:\u200d.[\U0001F3FB-\U0001F3FF]?)+
+        [\U0001f3fb-\U0001f3ff]?(?:\u200d.[\U0001f3fb-\U0001f3ff]?)+
         |
-        [\U0001F3FB-\U0001F3FF]
+        [\U0001f3fb-\U0001f3ff]
     )""",
     # flags
     FLAGS,
@@ -357,7 +357,7 @@ class TweetTokenizer(TokenizerI):
         self.strip_handles = strip_handles
         self.match_phone_numbers = match_phone_numbers
 
-    def tokenize(self, text: str) -> List[str]:
+    def tokenize(self, text: str) -> list[str]:
         """Tokenize the input text.
 
         :param text: str

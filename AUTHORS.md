@@ -304,12 +304,14 @@
 - Ron Urbach <https://github.com/sharpblade4>
 - Vivek Kalyan <https://github.com/vivekkalyan>
 - Tom Strange https://github.com/strangetom
+- Vincent Peth <https://github.com/ShadokDuBas>
 - Samer Masterson <https://github.com/samertm>
 - William LaCroix <https://github.com/WilliamPLaCroix>
 - Peter de Blanc <https://github.com/pdeblanc>
 - Jose Cols <https://github.com/josecols>
 - Christopher Smith <https://github.com/smithct2>
 - Ryan Mannion <https://github.com/ryanamannion>
+- Peter Pollak <https://github.com/Syzygy2048/>
 
 ## Others whose work we've taken and included in NLTK, but who didn't directly contribute it:
 

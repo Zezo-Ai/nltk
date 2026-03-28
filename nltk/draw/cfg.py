@@ -1,6 +1,6 @@
 # Natural Language Toolkit: CFG visualization
 #
-# Copyright (C) 2001-2025 NLTK Project
+# Copyright (C) 2001-2026 NLTK Project
 # Author: Edward Loper <edloper@gmail.com>
 # URL: <https://www.nltk.org/>
 # For license information, see LICENSE.TXT
@@ -306,7 +306,7 @@ class CFGEditor:
 
         self._analyze()
 
-    #         # Add the producitons to the text widget, and colorize them.
+    #         # Add the productions to the text widget, and colorize them.
     #         prod_by_lhs = {}
     #         for prod in self._cfg.productions():
     #             if len(prod.rhs()) > 0:
@@ -535,7 +535,7 @@ class CFGEditor:
     def _cancel(self, *e):
         try:
             self._reset()
-        except:
+        except Exception:
             pass
         self._destroy()
 
@@ -549,7 +549,7 @@ class CFGEditor:
                 width=75,
                 font="fixed",
             )
-        except:
+        except Exception:
             ShowText(
                 self._parent,
                 "Help: Chart Parser Demo",

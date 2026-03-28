@@ -10,13 +10,15 @@
 
 import json
 import logging
+import os
 import random
 from collections import defaultdict
 from os.path import join as path_join
+from pathlib import Path
 from tempfile import gettempdir
 
 from nltk import jsontags
-from nltk.data import find, load
+from nltk.data import FileSystemPathPointer, find, open_datafile
 from nltk.tag.api import TaggerI
 
 try:
@@ -67,7 +69,7 @@ class AveragedPerceptron:
         # Do a secondary alphabetic sort, for stability
         best_label = max(self.classes, key=lambda label: (scores[label], label))
         # compute the confidence
-        conf = max(self._softmax(scores)) if return_conf == True else None
+        conf = max(self._softmax(scores)) if return_conf else None
 
         return best_label, conf
 
@@ -136,7 +138,8 @@ class PerceptronTagger(TaggerI):
 
     Load the saved model:
 
-    >>> tagger2 = PerceptronTagger(loc=tagger.save_dir)
+    >>> from nltk.data import FileSystemPathPointer
+    >>> tagger2 = PerceptronTagger(loc=FileSystemPathPointer(tagger.save_dir))
     >>> print(sorted(list(tagger2.classes)))
     ['JJ', 'NN', 'NNS', 'PRP', 'VBZ']
 
@@ -196,13 +199,11 @@ class PerceptronTagger(TaggerI):
 
         context = self.START + [self.normalize(w) for w in tokens] + self.END
         for i, word in enumerate(tokens):
-            tag, conf = (
-                (self.tagdict.get(word), 1.0) if use_tagdict == True else (None, None)
-            )
+            tag, conf = (self.tagdict.get(word), 1.0) if use_tagdict else (None, None)
             if not tag:
                 features = self._get_features(i, word, context, prev, prev2)
                 tag, conf = self.model.predict(features, return_conf)
-            output.append((word, tag, conf) if return_conf == True else (word, tag))
+            output.append((word, tag, conf) if return_conf else (word, tag))
 
             prev2 = prev
             prev = tag
@@ -273,11 +274,24 @@ class PerceptronTagger(TaggerI):
 
     def load_from_json(self, lang="eng", loc=None):
         # Automatically find path to the tagger if location is not specified.
-        if not loc:
-            loc = find(f"taggers/averaged_perceptron_tagger_{lang}")
+        # loc can refer to zip or real FS
+        if loc is None:
+            loc = find(f"taggers/averaged_perceptron_tagger_{lang}/")
+        elif isinstance(loc, str):
+            # Backward compatible:
+            # - absolute paths are explicit filesystem locations
+            # - relative strings are treated as NLTK resource names and resolved via find()
+            if os.path.isabs(loc):
+                loc = FileSystemPathPointer(loc)
+            else:
+                loc = find(loc)
+        elif isinstance(loc, Path):
+            # Explicit filesystem path
+            loc = FileSystemPathPointer(str(loc))
+        # else: assume loc is already a PathPointer (zip or filesystem)
 
         def load_param(json_file):
-            with open(path_join(loc, json_file)) as fin:
+            with open_datafile(loc, json_file) as fin:
                 return json.load(fin)
 
         self.decode_json_params(

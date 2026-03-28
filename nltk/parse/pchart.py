@@ -1,6 +1,6 @@
 # Natural Language Toolkit: Probabilistic Chart Parsers
 #
-# Copyright (C) 2001-2025 NLTK Project
+# Copyright (C) 2001-2026 NLTK Project
 # Author: Edward Loper <edloper@gmail.com>
 #         Steven Bird <stevenbird1@gmail.com>
 # URL: <https://www.nltk.org/>
@@ -498,7 +498,7 @@ def demo(choice=None, draw_parses=None, print_parses=None):
         choice = int(sys.stdin.readline().strip()) - 1
     try:
         sent, grammar = demos[choice]
-    except:
+    except Exception:
         print("Bad sentence number")
         return
 

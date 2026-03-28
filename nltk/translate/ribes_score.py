@@ -1,11 +1,11 @@
 # Natural Language Toolkit: RIBES Score
 #
-# Copyright (C) 2001-2025 NLTK Project
+# Copyright (C) 2001-2026 NLTK Project
 # Contributors: Katsuhito Sudoh, Liling Tan, Kasramvd, J.F.Sebastian
 #               Mark Byers, ekhumoro, P. Ortiz
 # URL: <https://www.nltk.org/>
 # For license information, see LICENSE.TXT
-""" RIBES score implementation """
+"""RIBES score implementation"""
 
 import math
 from itertools import islice

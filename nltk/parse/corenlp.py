@@ -1,6 +1,6 @@
 # Natural Language Toolkit: Interface to the CoreNLP REST API.
 #
-# Copyright (C) 2001-2025 NLTK Project
+# Copyright (C) 2001-2026 NLTK Project
 # Author: Dmitrijs Milajevs <dimazest@gmail.com>
 #
 # URL: <https://www.nltk.org/>
@@ -29,7 +29,7 @@ class CoreNLPServerError(EnvironmentError):
 
 def try_port(port=0):
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.bind(("", port))
+    sock.bind(("localhost", port))
 
     p = sock.getsockname()[1]
     sock.close()
@@ -101,9 +101,17 @@ class CoreNLPServer:
         self.java_options = java_options or ["-mx2g"]
 
     def start(self, stdout="devnull", stderr="devnull"):
-        """Starts the CoreNLP server
+        """Start the CoreNLP server
+
+        This method checks the status of the started server, but does **not** stop
+        the server process if those checks fail. If you want the server process
+        to be stopped in that case, either use this class as a context manager
+        (see :meth:`.__enter__()`) or catch :exc:`~corenlp.CoreNLPServerError`
+        exception and stop the server manually.
 
         :param stdout, stderr: Specifies where CoreNLP output is redirected. Valid values are 'devnull', 'stdout', 'pipe'
+        :raises CoreNLPServerError: If the server fails to start or a status check fails
+            (in which case the server process remains running).
         """
         import requests
 
@@ -165,8 +173,19 @@ class CoreNLPServer:
         self.popen.wait()
 
     def __enter__(self):
-        self.start()
+        """Start the CoreNLP server
 
+        This method checks the status of the started server and stops the server process
+        if those checks fail. If you want the server process to **not** be stopped in that case,
+        use the :meth:`.start`/ :meth:`.stop` methods.
+
+        :raises CoreNLPServerError: If the server fails to start.
+        """
+        try:
+            self.start()
+        except CoreNLPServerError:
+            self.stop()
+            raise
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -364,7 +383,7 @@ class GenericCoreNLPParser(ParserI, TokenizerI, TaggerI):
 
         return [sentences[0] for sentences in self.raw_tag_sents(sentences, properties)]
 
-    def tag(self, sentence: str, properties=None) -> List[Tuple[str, str]]:
+    def tag(self, sentence: str, properties=None) -> list[tuple[str, str]]:
         """
         Tag a list of tokens.
 

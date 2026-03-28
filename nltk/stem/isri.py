@@ -1,7 +1,7 @@
 #
 # Natural Language Toolkit: The ISRI Arabic Stemmer
 #
-# Copyright (C) 2001-2025 NLTK Project
+# Copyright (C) 2001-2026 NLTK Project
 # Algorithm: Kazem Taghva, Rania Elkhoury, and Jeffrey Coombs (2005)
 # Author: Hosam Algasaier <hosam_hme@yahoo.com>
 # URL: <https://www.nltk.org/>
@@ -109,7 +109,7 @@ class ISRIStemmer(StemmerI):
         self.pr4 = {
             0: ["\u0645"],
             1: ["\u0627"],
-            2: ["\u0627", "\u0648", "\u064A"],
+            2: ["\u0627", "\u0648", "\u064a"],
             3: ["\u0629"],
         }
 

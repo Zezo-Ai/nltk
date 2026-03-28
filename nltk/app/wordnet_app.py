@@ -1,6 +1,6 @@
 # Natural Language Toolkit: WordNet Browser Application
 #
-# Copyright (C) 2001-2025 NLTK Project
+# Copyright (C) 2001-2026 NLTK Project
 # Author: Jussi Salmela <jtsalmela@users.sourceforge.net>
 #         Paul Bone <pbone@students.csse.unimelb.edu.au>
 # URL: <https://www.nltk.org/>
@@ -48,6 +48,7 @@ Options::
 import base64
 import copy
 import getopt
+import html
 import io
 import os
 import pickle
@@ -64,6 +65,7 @@ from urllib.parse import unquote_plus
 
 from nltk.corpus import wordnet as wn
 from nltk.corpus.reader.wordnet import Lemma, Synset
+from nltk.picklesec import RestrictedUnpickler
 
 firstClient = True
 
@@ -131,11 +133,13 @@ class MyServerHandler(BaseHTTPRequestHandler):
             # This doesn't seem to work with MWEs.
             type = "text/html"
             parts = (sp.split("?")[1]).split("&")
-            word = [
-                p.split("=")[1].replace("+", " ")
-                for p in parts
-                if p.startswith("nextWord")
-            ][0]
+            word = html.escape(
+                [
+                    p.split("=")[1].replace("+", " ")
+                    for p in parts
+                    if p.startswith("nextWord")
+                ][0]
+            )
             page, word = page_from_word(word)
         elif sp.startswith("lookup_"):
             # TODO add a variation of this that takes a non ecoded word or MWE.
@@ -199,7 +203,7 @@ def wnb(port=8000, runBrowser=True, logfilename=None):
     # so we need to force it to have a clear correct behaviour.
     #
     # Normally the server should run for as long as the user wants. they
-    # should idealy be able to control this from the UI by closing the
+    # should ideally be able to control this from the UI by closing the
     # window or tab.  Second best would be clicking a button to say
     # 'Shutdown' that first shutsdown the server and closes the window or
     # tab, or exits the text-mode browser.  Both of these are unfreasable.
@@ -234,8 +238,9 @@ def wnb(port=8000, runBrowser=True, logfilename=None):
         server_ready = threading.Event()
         browser_thread = startBrowser(url, server_ready)
 
-    # Start the server.
-    server = HTTPServer(("", port), MyServerHandler)
+    # Start the server. Bind to localhost only to prevent remote access
+    # and unauthenticated shutdown via /SHUTDOWN%20THE%20SERVER.
+    server = HTTPServer(("127.0.0.1", port), MyServerHandler)
     if logfile:
         logfile.write("NLTK Wordnet browser server running serving: %s\n" % url)
     if runBrowser:
@@ -606,7 +611,7 @@ def _synset_relations(word, synset, synset_relations):
     :rtype: str
     """
 
-    if not synset.name() in synset_relations:
+    if synset.name() not in synset_relations:
         return ""
     ref = Reference(word, synset_relations)
 
@@ -652,16 +657,6 @@ def _synset_relations(word, synset, synset_relations):
     )
 
     return html
-
-
-class RestrictedUnpickler(pickle.Unpickler):
-    """
-    Unpickler that prevents any class or function from being used during loading.
-    """
-
-    def find_class(self, module, name):
-        # Forbid every function
-        raise pickle.UnpicklingError(f"global '{module}.{name}' is forbidden")
 
 
 class Reference:
@@ -799,7 +794,9 @@ def page_from_reference(href):
                 except KeyError:
                     pass
     if not body:
-        body = "The word or words '%s' were not found in the dictionary." % word
+        body = "The word or words '%s' were not found in the dictionary." % html.escape(
+            word
+        )
     return body, word
 
 
@@ -837,7 +834,7 @@ def get_static_web_help_page():
 <!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01//EN" "http://www.w3.org/TR/html4/strict.dtd">
 <html>
      <!-- Natural Language Toolkit: Wordnet Interface: Graphical Wordnet Browser
-            Copyright (C) 2001-2025 NLTK Project
+            Copyright (C) 2001-2026 NLTK Project
             Author: Jussi Salmela <jtsalmela@users.sourceforge.net>
             URL: <https://www.nltk.org/>
             For license information, see LICENSE.TXT -->
@@ -907,7 +904,7 @@ def get_static_index_page(with_shutdown):
 <!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Frameset//EN"  "http://www.w3.org/TR/html4/frameset.dtd">
 <HTML>
      <!-- Natural Language Toolkit: Wordnet Interface: Graphical Wordnet Browser
-            Copyright (C) 2001-2025 NLTK Project
+            Copyright (C) 2001-2026 NLTK Project
             Author: Jussi Salmela <jtsalmela@users.sourceforge.net>
             URL: <https://www.nltk.org/>
             For license information, see LICENSE.TXT -->
@@ -940,7 +937,7 @@ def get_static_upper_page(with_shutdown):
 <!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01//EN" "http://www.w3.org/TR/html4/strict.dtd">
 <html>
     <!-- Natural Language Toolkit: Wordnet Interface: Graphical Wordnet Browser
-        Copyright (C) 2001-2025 NLTK Project
+        Copyright (C) 2001-2026 NLTK Project
         Author: Jussi Salmela <jtsalmela@users.sourceforge.net>
         URL: <https://www.nltk.org/>
         For license information, see LICENSE.TXT -->

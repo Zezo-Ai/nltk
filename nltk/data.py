@@ -1,6 +1,6 @@
 # Natural Language Toolkit: Utility functions
 #
-# Copyright (C) 2001-2025 NLTK Project
+# Copyright (C) 2001-2026 NLTK Project
 # Author: Edward Loper <edloper@gmail.com>
 # Author: ekaf (Restricting and switching pickles)
 # URL: <https://www.nltk.org/>
@@ -39,12 +39,35 @@ import pickle
 import re
 import sys
 import textwrap
+import urllib.request
 import zipfile
 from abc import ABCMeta, abstractmethod
 from gzip import WRITE as GZ_WRITE
 from gzip import GzipFile
 from io import BytesIO, TextIOWrapper
-from urllib.request import url2pathname, urlopen
+from urllib.request import url2pathname
+
+from nltk.pathsec import ZipFile
+from nltk.pathsec import open as _secure_open
+from nltk.pathsec import urlopen as _secure_urlopen
+
+# Reject unsafe no-protocol paths: traversal segments, trailing '..', absolute paths,
+# backslashes, Windows drive letters. Use a raw-string pattern and do not anchor only
+# at the start — we'll use search() for safety checks.
+_UNSAFE_NO_PROTOCOL_RE = re.compile(r"(?:\.\./|\.\.$|^/|\\|[A-Za-z]:[/\\])")
+
+
+def _reject_unsafe_no_protocol(resource_url):
+    """
+    Reject unsafe resource strings that *omit an explicit protocol*.
+
+    Note: some no-protocol inputs are interpreted by split_resource_url() as
+    file-style paths (e.g., bare Windows drive paths like "C:/foo"). These must
+    still be rejected here when they contain unsafe patterns.
+    """
+    if _UNSAFE_NO_PROTOCOL_RE.search(resource_url):
+        raise ValueError(f"Unsafe resource path: {resource_url!r}")
+
 
 try:
     from zlib import Z_SYNC_FLUSH as FLUSH
@@ -133,6 +156,16 @@ def split_resource_url(resource_url):
     ('file', '/C:/home/nltk')
     """
     protocol, path_ = resource_url.split(":", 1)
+
+    # Handle plain Windows drive paths like "C:/foo" or "D:/bar"
+    # Treat these as file-style inputs even without "file:" prefix.
+    if (
+        len(protocol) == 1
+        and protocol.isalpha()
+        and (path_.startswith("/") or path_.startswith("\\"))
+    ):
+        return "file", f"/{protocol}:{path_.lstrip('/')}"
+
     if protocol == "nltk":
         pass
     elif protocol == "file":
@@ -140,6 +173,7 @@ def split_resource_url(resource_url):
             path_ = "/" + path_.lstrip("/")
     else:
         path_ = re.sub(r"^/{0,2}", "", path_)
+
     return protocol, path_
 
 
@@ -161,10 +195,6 @@ def normalize_resource_url(resource_url):
     True
     >>> not windows or normalize_resource_url('file:////C:/dir/file') == 'file:///C:/dir/file'
     True
-    >>> not windows or normalize_resource_url('nltk:C:/dir/file') == 'file:///C:/dir/file'
-    True
-    >>> not windows or normalize_resource_url('nltk:C:\\dir\\file') == 'file:///C:/dir/file'
-    True
     >>> windows or normalize_resource_url('file:/dir/file/toy.cfg') == 'file:///dir/file/toy.cfg'
     True
     >>> normalize_resource_url('nltk:home/nltk')
@@ -175,28 +205,58 @@ def normalize_resource_url(resource_url):
     'https://example.com/dir/file'
     >>> normalize_resource_url('dir/file')
     'nltk:dir/file'
+
+    # Security: reject attempts to smuggle local Windows paths via the "nltk:" protocol.
+    >>> normalize_resource_url('nltk:C:/dir/file')  # doctest: +ELLIPSIS
+    Traceback (most recent call last):
+    ...
+    ValueError: Unsafe resource path: ...
+    >>> normalize_resource_url(r'nltk:C:\dir\file')  # doctest: +ELLIPSIS
+    Traceback (most recent call last):
+    ...
+    ValueError: Unsafe resource path: ...
     """
     try:
         protocol, name = split_resource_url(resource_url)
     except ValueError:
-        # the resource url has no protocol, use the nltk protocol by default
+        # No protocol → default to 'nltk:'
+        _reject_unsafe_no_protocol(resource_url)
         protocol = "nltk"
         name = resource_url
-    # use file protocol if the path is an absolute path
-    if protocol == "nltk" and os.path.isabs(name):
-        protocol = "file://"
-        name = normalize_resource_name(name, False, None)
+    # If split_resource_url() inferred "file" from an input that *omitted* an explicit
+    # protocol (e.g., "C:/dir/file" or "C:\\dir\\file"), then treat it as a no-protocol
+    # input for security validation to prevent unsafe local path access.
+    if protocol == "file" and not resource_url.lower().startswith("file:"):
+        _reject_unsafe_no_protocol(resource_url)
+
+    # ----------------------------------------------------------------------
+    # Protocol-specific handling
+    # ----------------------------------------------------------------------
+
+    # Case 1: nltk:<path>
+    if protocol == "nltk":
+        # If "nltk:" is used with an absolute path, treat it as "file://"
+        # Reject Windows drive-letter paths even when explicitly using the nltk: protocol.
+        # This prevents smuggling filesystem paths through nltk: URLs.
+        if re.match(r"^[A-Za-z]:[/\\]", name):
+            raise ValueError(f"Unsafe resource path: {resource_url!r}")
+        if os.path.isabs(name):
+            protocol = "file://"
+            name = normalize_resource_name(name, False, None)
+        else:
+            protocol = "nltk:"
+            name = normalize_resource_name(name, True)
+
+    # Case 2: file:<path>
     elif protocol == "file":
         protocol = "file://"
-        # name is absolute
         name = normalize_resource_name(name, False, None)
-    elif protocol == "nltk":
-        protocol = "nltk:"
-        name = normalize_resource_name(name, True)
+
+    # Case 3: External URLs (http, https, ftp, etc.)
     else:
-        # handled by urllib
         protocol += "://"
-    return "".join([protocol, name])
+
+    return protocol + name
 
 
 def normalize_resource_name(resource_name, allow_relative=True, relative_path=None):
@@ -320,7 +380,12 @@ class FileSystemPathPointer(PathPointer, str):
         return self._path
 
     def open(self, encoding=None):
-        stream = open(self._path, "rb")
+        """
+        Secure open — prevents absolute direct access outside pointer root.
+        Path validation is enforced by pathsec.open() which checks the
+        resolved path against allowed NLTK data roots.
+        """
+        stream = _secure_open(self._path, "rb")
         if encoding is not None:
             stream = SeekableUnicodeStreamReader(stream, encoding)
         return stream
@@ -329,8 +394,23 @@ class FileSystemPathPointer(PathPointer, str):
         return os.stat(self._path).st_size
 
     def join(self, fileid):
-        _path = os.path.join(self._path, fileid)
-        return FileSystemPathPointer(_path)
+        """
+        Harden join() to prevent traversal & ensure corpus-root sandbox.
+        """
+        fileid = str(fileid).replace("\\", "/")
+
+        # Block ../ traversal
+        if ".." in fileid.split("/"):
+            raise ValueError(f"Traversal blocked: {fileid}")
+
+        joined = os.path.normpath(os.path.join(self._path, fileid))
+        root = os.path.normpath(self._path)
+
+        # Enforce root boundary — must stay inside corpus root
+        if not (joined == root or joined.startswith(root + os.sep)):
+            raise ValueError(f"Escape outside root blocked: {joined}")
+
+        return FileSystemPathPointer(joined)
 
     def __repr__(self):
         return "FileSystemPathPointer(%r)" % self._path
@@ -417,7 +497,7 @@ class ZipFilePathPointer(PathPointer):
     @property
     def zipfile(self):
         """
-        The zipfile.ZipFile object used to access the zip file
+        The ZipFile object used to access the zip file
         containing the entry identified by this path pointer.
         """
         return self._zipfile
@@ -464,6 +544,36 @@ _resource_cache = {}
    need to be loaded more than once."""
 
 
+def open_datafile(path, file_name="", encoding="utf-8"):
+    """
+    Open a data file using a PathPointer, supporting both filesystem and zip file paths.
+
+    The function can be used in two ways:
+
+    1. `path` is a PathPointer to a directory, and `file_name` is the name of a file
+       within that directory.
+    2. `path` is a PathPointer to a file, and `file_name` is left empty.
+
+    :param path: A PathPointer (e.g. FileSystemPathPointer or ZipFilePathPointer)
+        representing either the file to open (when file_name is empty), or the
+        directory containing the file.
+    :type path: PathPointer
+    :param file_name: The name of the file to open within the directory. Leave empty
+        if `path` already points to the file.
+    :type file_name: str
+    :param encoding: The character encoding to use when opening the file. If None,
+        a binary stream is returned.
+    :type encoding: str or None
+    :return: A file-like object (binary stream if encoding is None, otherwise a text
+        stream with the specified encoding).
+    :rtype: file-like
+    """
+    if file_name:
+        # Use .join() to reach the file regardless of zip/real FS.
+        path = path.join(file_name)
+    return path.open(encoding=encoding)
+
+
 def find(resource_name, paths=None):
     """
     Find the given resource by searching through the directories and
@@ -502,6 +612,10 @@ def find(resource_name, paths=None):
     :rtype: str
     """
     resource_name = normalize_resource_name(resource_name, True)
+    # Defense-in-depth: reject traversal/absolute paths even if caller bypassed normalize_resource_url()
+    # Use search() so traversal components anywhere in the resource_name trigger rejection.
+    if _UNSAFE_NO_PROTOCOL_RE.search(resource_name):
+        raise ValueError(f"Unsafe resource path: {resource_name!r}")
 
     # Resolve default paths at runtime in-case the user overrides
     # nltk.data.path
@@ -509,8 +623,18 @@ def find(resource_name, paths=None):
         paths = path
 
     # Check if the resource name includes a zipfile name
-    m = re.match(r"(.*\.zip)/?(.*)$|", resource_name)
-    zipfile, zipentry = m.groups()
+    m = re.match(r"(.*?\.zip)/?(.*)$", resource_name)
+    if m:
+        zipfile, zipentry = m.groups()
+    else:
+        zipfile = None
+
+    # Evidence that the *package* exists but the specific entry does not.
+    _package_present_but_entry_missing = []
+
+    def _note_near_miss(where):
+        if where not in _package_present_but_entry_missing:
+            _package_present_but_entry_missing.append(where)
 
     # Check each item in our path
     for path_ in paths:
@@ -520,6 +644,7 @@ def find(resource_name, paths=None):
                 return ZipFilePathPointer(path_, resource_name)
             except OSError:
                 # resource not in zipfile
+                _note_near_miss(path_)
                 continue
 
         # Is the path item a directory or is resource_name an absolute path?
@@ -531,6 +656,22 @@ def find(resource_name, paths=None):
                         return GzipFileSystemPathPointer(p)
                     else:
                         return FileSystemPathPointer(p)
+                else:
+                    # If the package exists (either as a directory or as a .zip)
+                    # but the specific requested file doesn't, record a "near miss"
+                    # so the eventual LookupError isn't misleading.
+                    parts = [p for p in resource_name.split("/") if p]
+                    # Only record a "near miss" when there is a sub-entry *within* a
+                    # package (i.e. more than two meaningful path components), so we
+                    # don't misclassify requests for the package root itself.
+                    if len(parts) > 2:
+                        pkg = "/".join(parts[:2])  # e.g. "corpora/stopwords"
+                        pkg_dir = os.path.join(path_, url2pathname(pkg))
+                        pkg_zip = os.path.join(path_, url2pathname(pkg + ".zip"))
+                        if os.path.isdir(pkg_dir):
+                            _note_near_miss(pkg_dir)
+                        elif os.path.isfile(pkg_zip):
+                            _note_near_miss(pkg_zip)
             else:
                 p = os.path.join(path_, url2pathname(zipfile))
                 if os.path.exists(p):
@@ -538,6 +679,7 @@ def find(resource_name, paths=None):
                         return ZipFilePathPointer(p, zipentry)
                     except OSError:
                         # resource not in zipfile
+                        _note_near_miss(p)
                         continue
 
     # Fallback: if the path doesn't include a zip file, then try
@@ -553,25 +695,42 @@ def find(resource_name, paths=None):
                 pass
 
     # Identify the package (i.e. the .zip file) to download.
-    resource_zipname = resource_name.split("/")[1]
+    parts = resource_name.split("/")
+    resource_zipname = parts[1] if len(parts) > 1 else parts[0]
     if resource_zipname.endswith(".zip"):
         resource_zipname = resource_zipname.rpartition(".")[0]
-    # Display a friendly error message if the resource wasn't found:
-    msg = str(
-        "Resource \33[93m{resource}\033[0m not found.\n"
-        "Please use the NLTK Downloader to obtain the resource:\n\n"
-        "\33[31m"  # To display red text in terminal.
-        ">>> import nltk\n"
-        ">>> nltk.download('{resource}')\n"
-        "\033[0m"
-    ).format(resource=resource_zipname)
+
+    # Display a friendly error message if the resource wasn't found.
+    # If the package appears present but the specific entry is missing, keep
+    # the download hint as a secondary suggestion.
+    if _package_present_but_entry_missing:
+        msg = (
+            f"Resource entry '{resource_name}' not found in installed package "
+            f"'{resource_zipname}'.\n"
+            "The package appears to be installed, but the requested file is missing.\n"
+            "\n"
+            "If you believe the package is corrupted or out of date, you can try "
+            "re-downloading it with the NLTK Downloader:\n\n"
+            ">>> import nltk\n"
+            f">>> nltk.download('{resource_zipname}')\n"
+        )
+    else:
+        msg = (
+            f"Resource '{resource_zipname}' not found.\n"
+            "Please use the NLTK Downloader to obtain the resource:\n\n"
+            ">>> import nltk\n"
+            f">>> nltk.download('{resource_zipname}')\n"
+        )
     msg = textwrap_indent(msg)
 
     msg += "\n  For more information see: https://www.nltk.org/data.html\n"
 
-    msg += "\n  Attempted to load \33[93m{resource_name}\033[0m\n".format(
-        resource_name=resource_name
-    )
+    msg += f"\n  Attempted to load '{resource_name}'\n"
+
+    if _package_present_but_entry_missing:
+        msg += "\n  Package was found in:" + "".join(
+            "\n    - %r" % d for d in _package_present_but_entry_missing
+        )
 
     msg += "\n  Searched in:" + "".join("\n    - %r" % d for d in paths)
     sep = "*" * 70
@@ -659,7 +818,7 @@ def restricted_pickle_load(string):
     """
     Prevents any class or function from loading.
     """
-    from nltk.app.wordnet_app import RestrictedUnpickler
+    from nltk.picklesec import RestrictedUnpickler
 
     return RestrictedUnpickler(BytesIO(string)).load()
 
@@ -955,16 +1114,29 @@ def _open(resource_url):
         loaded from.  The default protocol is "nltk:", which searches
         for the file in the the NLTK data package.
     """
-    resource_url = normalize_resource_url(resource_url)
-    protocol, path_ = split_resource_url(resource_url)
+    # Restore "no protocol" handling for internal resilience
+    resource_url = str(resource_url)
+    if ":" not in resource_url:
+        resource_url = "nltk:" + resource_url
 
-    if protocol is None or protocol.lower() == "nltk":
-        return find(path_, path + [""]).open()
-    elif protocol.lower() == "file":
-        # urllib might not use mode='rb', so handle this one ourselves:
-        return find(path_, [""]).open()
+    protocol, path_ = resource_url.split(":", 1)
+
+    if protocol == "nltk":
+        # If find() or .open() raises a ValueError (security) or LookupError,
+        # let it bubble up or handle it based on load() logic.
+        return find(path_).open()
+    elif protocol == "file":
+        local_path = url2pathname(path_)
+        try:
+            # 1. Attempt to use NLTK's standard search paths (Safe/Normalized)
+            return find(local_path).open()
+        except (LookupError, ValueError):
+            # 2. Fallback for absolute paths (e.g., file:///etc/passwd)
+            # This ensures even direct file access hits the pathsec sentinel.
+            return _secure_open(local_path, "rb")
     else:
-        return urlopen(resource_url)
+        # Network protocols (http, https, ftp)
+        return _secure_urlopen(resource_url)
 
 
 ######################################################################
@@ -1003,9 +1175,9 @@ class LazyLoader:
 ######################################################################
 
 
-class OpenOnDemandZipFile(zipfile.ZipFile):
+class OpenOnDemandZipFile(ZipFile):
     """
-    A subclass of ``zipfile.ZipFile`` that closes its file pointer
+    A subclass of ``ZipFile`` that closes its file pointer
     whenever it is not using it; and re-opens it when it needs to read
     data from the zipfile.  This is useful for reducing the number of
     open file handles when many zip files are being accessed at once.
@@ -1017,7 +1189,7 @@ class OpenOnDemandZipFile(zipfile.ZipFile):
     def __init__(self, filename):
         if not isinstance(filename, str):
             raise TypeError("ReopenableZipFile filename must be a string")
-        zipfile.ZipFile.__init__(self, filename)
+        ZipFile.__init__(self, filename)
         assert self.filename == filename
         self.close()
         # After closing a ZipFile object, the _fileRefCnt needs to be cleared
@@ -1026,12 +1198,11 @@ class OpenOnDemandZipFile(zipfile.ZipFile):
 
     def read(self, name):
         assert self.fp is None
-        self.fp = open(self.filename, "rb")
+        # This will be validated by pathsec.open
+        self.fp = _secure_open(self.filename, "rb")
         value = zipfile.ZipFile.read(self, name)
-        # Ensure that _fileRefCnt needs to be set for Python2and3 compatible code.
-        # Since we only opened one file here, we add 1.
-        self._fileRefCnt += 1
-        self.close()
+        self.fp.close()
+        self.fp = None
         return value
 
     def write(self, *args, **kwargs):

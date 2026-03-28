@@ -1,6 +1,6 @@
 # Natural Language Toolkit: TnT Tagger
 #
-# Copyright (C) 2001-2025 NLTK Project
+# Copyright (C) 2001-2026 NLTK Project
 # Author: Sam Huston <sjh900@gmail.com>
 #
 # URL: <https://www.nltk.org/>
@@ -143,7 +143,7 @@ class TnT(TaggerI):
         # Ensure that local C flag is initialized before use
         C = False
 
-        if self._unk is not None and self._T == False:
+        if self._unk is not None and not self._T:
             self._unk.train(data)
 
         for sent in data:

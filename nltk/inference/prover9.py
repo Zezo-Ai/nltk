@@ -1,6 +1,6 @@
 # Natural Language Toolkit: Interface to the Prover9 Theorem Prover
 #
-# Copyright (C) 2001-2025 NLTK Project
+# Copyright (C) 2001-2026 NLTK Project
 # Author: Dan Garrette <dhgarrette@gmail.com>
 #         Ewan Klein <ewan@inf.ed.ac.uk>
 #
@@ -228,14 +228,14 @@ def convert_to_prover9(input):
         for s in input:
             try:
                 result.append(_convert_to_prover9(s.simplify()))
-            except:
+            except Exception:
                 print("input %s cannot be converted to Prover9 input syntax" % input)
                 raise
         return result
     else:
         try:
             return _convert_to_prover9(input.simplify())
-        except:
+        except Exception:
             print("input %s cannot be converted to Prover9 input syntax" % input)
             raise
 

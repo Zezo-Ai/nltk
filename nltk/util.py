@@ -1,6 +1,6 @@
 # Natural Language Toolkit: Utility functions
 #
-# Copyright (C) 2001-2025 NLTK Project
+# Copyright (C) 2001-2026 NLTK Project
 # Author: Steven Bird <stevenbird1@gmail.com>
 #         Eric Kafe <kafe.eric@gmail.com> (acyclic closures)
 # URL: <https://www.nltk.org/>
@@ -15,6 +15,7 @@ import unicodedata
 import warnings
 from collections import defaultdict, deque
 from itertools import chain, combinations, islice, tee
+from pathlib import Path
 from pprint import pprint
 from urllib.request import (
     HTTPPasswordMgrWithDefaultRealm,
@@ -28,6 +29,7 @@ from urllib.request import (
 
 from nltk.collections import *
 from nltk.internals import deprecated, raise_unorderable_types, slice_bounds
+from nltk.pathsec import open as _secure_open
 
 ######################################################################
 # Short usage message
@@ -216,14 +218,53 @@ def re_show(regexp, string, left="{", right="}"):
 
 
 # recipe from David Mertz
-def filestring(f):
+def filestring(f, allowed_dir=None):
+    """
+    Read a file path or file-like object into a string.
+
+    Security:
+    - Paths are resolved via ``Path.resolve()`` to prevent
+      symlink and ``../`` traversal attacks.
+    - If ``allowed_dir`` is provided, the resolved path must
+      fall within that directory tree.
+    - All file opens go through ``pathsec.open``, which
+      validates paths against NLTK's allowed data roots.
+    - File-like objects with a ``.read()`` method are passed
+      through without path checks.
+
+    :param f: a file path or file-like object with a ``.read()`` method
+    :param allowed_dir: if provided, restricts file access to paths
+        within this directory; raises ``PermissionError`` if the
+        resolved path falls outside it
+    :raises PermissionError: if ``allowed_dir`` is set and ``f``
+        resolves outside it, or if pathsec blocks the path
+    :rtype: str
+    """
     if hasattr(f, "read"):
         return f.read()
     elif isinstance(f, str):
-        with open(f) as infile:
+        # FIX: Resolve the path once to prevent symlink/rename races
+        target_path = Path(f).resolve()
+
+        if allowed_dir is not None:
+            safe_root = Path(allowed_dir).resolve()
+            # FIX: Use is_relative_to for robust boundary check
+            if not target_path.is_relative_to(safe_root):
+                raise PermissionError(
+                    f"Security Violation: Path {target_path} is outside allowed_dir {safe_root}"
+                )
+
+        # FIX: Use _secure_open with the resolved target_path
+        with _secure_open(target_path, encoding="utf-8", errors="ignore") as infile:
             return infile.read()
-    else:
-        raise ValueError("Must be called with a filename or file-like object")
+
+    # Fallback for other types
+    try:
+        with _secure_open(f, encoding="utf-8", errors="ignore") as infile:
+            return infile.read()
+    except UnicodeDecodeError:
+        with _secure_open(f, encoding="latin-1") as infile:
+            return infile.read()
 
 
 ##########################################################################

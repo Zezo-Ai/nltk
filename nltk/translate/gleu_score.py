@@ -1,12 +1,12 @@
 # Natural Language Toolkit: GLEU Score
 #
-# Copyright (C) 2001-2025 NLTK Project
+# Copyright (C) 2001-2026 NLTK Project
 # Authors:
 # Contributors: Mike Schuster, Michael Wayne Goodman, Liling Tan
 # URL: <https://www.nltk.org/>
 # For license information, see LICENSE.TXT
 
-""" GLEU score implementation. """
+"""GLEU score implementation."""
 
 from collections import Counter
 

@@ -310,6 +310,7 @@
 - Peter de Blanc <https://github.com/pdeblanc>
 - Jose Cols <https://github.com/josecols>
 - Christopher Smith <https://github.com/smithct2>
+- scruge1 <https://github.com/scruge1>
 - Ryan Mannion <https://github.com/ryanamannion>
 - Peter Pollak <https://github.com/Syzygy2048/>
 

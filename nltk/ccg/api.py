@@ -328,7 +328,7 @@ class FunctionalCategory(AbstractCCGCategory):
         sub_res = self._res.substitute(subs)
         sub_dir = self._dir.substitute(subs)
         sub_arg = self._arg.substitute(subs)
-        return FunctionalCategory(sub_res, sub_arg, self._dir)
+        return FunctionalCategory(sub_res, sub_arg, sub_dir)
 
     # A function can unify with another function, so long as its
     # constituents can unify, or with an unrestricted variable.

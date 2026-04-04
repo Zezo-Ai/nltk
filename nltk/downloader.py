@@ -691,7 +691,7 @@ class Downloader:
             return
 
         MAX_ZOMBIE_TIME = 60
-        POLL_INTERVAL = 15
+        POLL_INTERVAL = 2  # Reduced to 2 seconds so fast downloads don't block waiters
 
         # 1. Cooperative Wait Loop
         while True:
@@ -717,14 +717,20 @@ class Downloader:
                         new_size = os.path.getsize(tmp_filepath)
                         if new_size > last_size:
                             continue
+
                         if (time.time() - mtime) < MAX_ZOMBIE_TIME:
                             continue
+
+                        # ZOMBIE RECOVERY FIX: Remove the dead file so it can be claimed
+                        try:
+                            os.remove(tmp_filepath)
+                        except OSError:
+                            pass
             except (FileNotFoundError, OSError):
                 pass
 
             # 2. Atomic Claim
             try:
-                # Ensure the download_dir exists
                 os.makedirs(download_dir, exist_ok=True)
                 os.makedirs(os.path.join(download_dir, info.subdir), exist_ok=True)
                 fd = os.open(tmp_filepath, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
@@ -761,7 +767,8 @@ class Downloader:
         yield ProgressMessage(5)
         try:
             infile = urlopen(info.url)
-            with open(tmp_filepath, "ab") as outfile:
+            # FIX: Use 'wb' instead of 'ab'. O_EXCL ensures it is a fresh file.
+            with open(tmp_filepath, "wb") as outfile:
                 num_blocks = max(1, info.size / (1024 * 16))
                 for block in itertools.count():
                     s = infile.read(1024 * 16)
@@ -774,6 +781,9 @@ class Downloader:
             infile.close()
 
             os.replace(tmp_filepath, filepath)
+
+            # FIX: Clear cache immediately after successful download
+            self._status_cache.pop(info.id, None)
 
         except OSError as e:
             if os.path.exists(tmp_filepath):

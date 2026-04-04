@@ -676,19 +676,8 @@ class Downloader:
         yield StartPackageMessage(info)
         yield ProgressMessage(0)
 
-        # Do we already have the current version?
-        status = self.status(info, download_dir)
-        if not force and status == self.INSTALLED:
-            yield UpToDateMessage(info)
-            yield ProgressMessage(100)
-            yield FinishPackageMessage(info)
-            return
-
-        # Remove the package from our status cache
-        self._status_cache.pop(info.id, None)
-
-        # Check for (and remove) any old/stale version.
         filepath = os.path.join(download_dir, info.filename)
+        tmp_filepath = filepath + ".tmp"
 
         # Defense-in-depth: verify filepath stays within download_dir
         real_download = os.path.realpath(os.path.abspath(download_dir))
@@ -701,41 +690,106 @@ class Downloader:
             )
             return
 
+        MAX_ZOMBIE_TIME = 60
+        POLL_INTERVAL = 15
+
+        # 1. Cooperative Wait Loop
+        while True:
+            self._status_cache.pop(info.id, None)
+            status = self.status(info, download_dir)
+
+            if not force and status == self.INSTALLED:
+                yield UpToDateMessage(info)
+                yield ProgressMessage(100)
+                yield FinishPackageMessage(info)
+                return
+
+            try:
+                if os.path.exists(tmp_filepath):
+                    last_size = os.path.getsize(tmp_filepath)
+                    mtime = os.path.getmtime(tmp_filepath)
+
+                    import time
+
+                    time.sleep(POLL_INTERVAL)
+
+                    if os.path.exists(tmp_filepath):
+                        new_size = os.path.getsize(tmp_filepath)
+                        if new_size > last_size:
+                            continue
+                        if (time.time() - mtime) < MAX_ZOMBIE_TIME:
+                            continue
+            except (FileNotFoundError, OSError):
+                pass
+
+            # 2. Atomic Claim
+            try:
+                # Ensure the download_dir exists
+                os.makedirs(download_dir, exist_ok=True)
+                os.makedirs(os.path.join(download_dir, info.subdir), exist_ok=True)
+                fd = os.open(tmp_filepath, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                os.close(fd)
+                break
+            except FileExistsError:
+                continue
+
+        # 3. Post-Lock Verification (Double-Check)
+        self._status_cache.pop(info.id, None)
+        status = self.status(info, download_dir)
+        if not force and status == self.INSTALLED:
+            if os.path.exists(tmp_filepath):
+                try:
+                    os.remove(tmp_filepath)
+                except FileNotFoundError:
+                    pass
+            yield UpToDateMessage(info)
+            yield ProgressMessage(100)
+            yield FinishPackageMessage(info)
+            return
+
+        # 4. Remove Stale / Old versions
         if os.path.exists(filepath):
             if status == self.STALE:
                 yield StaleMessage(info)
-            os.remove(filepath)
+            try:
+                os.remove(filepath)
+            except FileNotFoundError:
+                pass
 
-        # Ensure the download_dir exists
-        os.makedirs(download_dir, exist_ok=True)
-        os.makedirs(os.path.join(download_dir, info.subdir), exist_ok=True)
-
-        # Download the file.  This will raise an IOError if the url
-        # is not found.
+        # 5. Download Leader
         yield StartDownloadMessage(info)
         yield ProgressMessage(5)
         try:
             infile = urlopen(info.url)
-            with open(filepath, "wb") as outfile:
+            with open(tmp_filepath, "ab") as outfile:
                 num_blocks = max(1, info.size / (1024 * 16))
                 for block in itertools.count():
-                    s = infile.read(1024 * 16)  # 16k blocks.
-                    outfile.write(s)
+                    s = infile.read(1024 * 16)
                     if not s:
                         break
-                    if block % 2 == 0:  # how often?
+                    outfile.write(s)
+                    if block % 10 == 0:
+                        os.utime(tmp_filepath, None)
                         yield ProgressMessage(min(80, 5 + 75 * (block / num_blocks)))
             infile.close()
+
+            os.replace(tmp_filepath, filepath)
+
         except OSError as e:
+            if os.path.exists(tmp_filepath):
+                try:
+                    os.remove(tmp_filepath)
+                except FileNotFoundError:
+                    pass
             yield ErrorMessage(
                 info,
                 "Error downloading %r from <%s>:" "\n  %s" % (info.id, info.url, e),
             )
             return
+
         yield FinishDownloadMessage(info)
         yield ProgressMessage(80)
 
-        # If it's a zipfile, uncompress it.
         if info.filename.endswith(".zip"):
             zipdir = os.path.join(download_dir, info.subdir)
             # Unzip if we're unzipping by default; *or* if it's already

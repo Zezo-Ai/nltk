@@ -676,6 +676,18 @@ class Downloader:
         yield StartPackageMessage(info)
         yield ProgressMessage(0)
 
+        # Do we already have the current version?
+        status = self.status(info, download_dir)
+        if not force and status == self.INSTALLED:
+            yield UpToDateMessage(info)
+            yield ProgressMessage(100)
+            yield FinishPackageMessage(info)
+            return
+
+        # Remove the package from our status cache
+        self._status_cache.pop(info.id, None)
+
+        # Check for (and remove) any old/stale version.
         filepath = os.path.join(download_dir, info.filename)
         tmp_filepath = filepath + ".tmp"
 
@@ -691,7 +703,7 @@ class Downloader:
             return
 
         MAX_ZOMBIE_TIME = 60
-        POLL_INTERVAL = 2  # Reduced to 2 seconds so fast downloads don't block waiters
+        POLL_INTERVAL = 2
 
         # 1. Cooperative Wait Loop
         while True:
@@ -706,19 +718,20 @@ class Downloader:
 
             try:
                 if os.path.exists(tmp_filepath):
-                    last_size = os.path.getsize(tmp_filepath)
-                    mtime = os.path.getmtime(tmp_filepath)
-
-                    import time
+                    before_stat = os.stat(tmp_filepath)
+                    last_size = before_stat.st_size
 
                     time.sleep(POLL_INTERVAL)
 
                     if os.path.exists(tmp_filepath):
-                        new_size = os.path.getsize(tmp_filepath)
+                        after_stat = os.stat(tmp_filepath)
+                        new_size = after_stat.st_size
+                        new_mtime = after_stat.st_mtime
+
                         if new_size > last_size:
                             continue
 
-                        if (time.time() - mtime) < MAX_ZOMBIE_TIME:
+                        if (time.time() - new_mtime) < MAX_ZOMBIE_TIME:
                             continue
 
                         # ZOMBIE RECOVERY FIX: Remove the dead file so it can be claimed
@@ -731,8 +744,10 @@ class Downloader:
 
             # 2. Atomic Claim
             try:
+                # Ensure the download_dir exists
                 os.makedirs(download_dir, exist_ok=True)
                 os.makedirs(os.path.join(download_dir, info.subdir), exist_ok=True)
+
                 fd = os.open(tmp_filepath, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
                 os.close(fd)
                 break
@@ -753,7 +768,6 @@ class Downloader:
             yield FinishPackageMessage(info)
             return
 
-        # 4. Remove Stale / Old versions
         if os.path.exists(filepath):
             if status == self.STALE:
                 yield StaleMessage(info)
@@ -765,9 +779,9 @@ class Downloader:
         # 5. Download Leader
         yield StartDownloadMessage(info)
         yield ProgressMessage(5)
+
         try:
             infile = urlopen(info.url)
-            # FIX: Use 'wb' instead of 'ab'. O_EXCL ensures it is a fresh file.
             with open(tmp_filepath, "wb") as outfile:
                 num_blocks = max(1, info.size / (1024 * 16))
                 for block in itertools.count():
@@ -781,8 +795,6 @@ class Downloader:
             infile.close()
 
             os.replace(tmp_filepath, filepath)
-
-            # FIX: Clear cache immediately after successful download
             self._status_cache.pop(info.id, None)
 
         except OSError as e:
@@ -800,8 +812,10 @@ class Downloader:
         yield FinishDownloadMessage(info)
         yield ProgressMessage(80)
 
+        # Check if it needs to be unzipped.
         if info.filename.endswith(".zip"):
             zipdir = os.path.join(download_dir, info.subdir)
+
             # Unzip if we're unzipping by default; *or* if it's already
             # been unzipped (presumably a previous version).
             if info.unzip or os.path.exists(os.path.join(zipdir, info.id)):

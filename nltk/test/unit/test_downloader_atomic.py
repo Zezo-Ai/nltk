@@ -1,5 +1,6 @@
 import hashlib
 import io
+import multiprocessing
 import os
 import shutil
 import tempfile
@@ -15,7 +16,6 @@ from nltk.downloader import Downloader, Package
 # 1. Dynamically generate a valid, minimal ZIP file in memory
 zip_buffer = io.BytesIO()
 with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_STORED) as zf:
-    # FIX: Place the text file inside an 'abc' folder within the zip
     zf.writestr("abc/dummy.txt", b"real zip payload")
 ZIP_BYTES = zip_buffer.getvalue()
 ZIP_SIZE = len(ZIP_BYTES)
@@ -74,7 +74,7 @@ class TestDownloaderAtomic(unittest.TestCase):
             unzipped_size=16,  # Length of b"real zip payload"
             filename="abc.zip",
             checksum=ZIP_MD5,
-            unzip=True,  # Set to True! Let's test the actual unzip logic
+            unzip=True,
         )
 
     def tearDown(self):
@@ -86,8 +86,11 @@ class TestDownloaderAtomic(unittest.TestCase):
         dl = Downloader(download_dir=self.test_dir)
         num_concurrent = 3
 
-        # ProcessPoolExecutor simulates the exact environment where BadZipFile occurs
-        with ProcessPoolExecutor(max_workers=num_concurrent) as executor:
+        # Use 'spawn' to prevent deadlocks from forking a process that already has running threads
+        mp_ctx = multiprocessing.get_context("spawn")
+        with ProcessPoolExecutor(
+            max_workers=num_concurrent, mp_context=mp_ctx
+        ) as executor:
             futures = [
                 executor.submit(dl.download, self.pkg, quiet=True)
                 for _ in range(num_concurrent)

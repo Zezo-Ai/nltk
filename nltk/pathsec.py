@@ -259,7 +259,9 @@ def urlopen(url, *args, **kwargs):
     if urllib.request._opener is not None:
         for handler in urllib.request._opener.handlers:
             if isinstance(handler, urllib.request.ProxyHandler):
-                handlers.append(urllib.request.ProxyHandler(handler.proxies))
+                # Copy the dictionary to prevent shared mutable state
+                isolated_proxies = dict(handler.proxies) if handler.proxies else {}
+                handlers.append(urllib.request.ProxyHandler(isolated_proxies))
             elif isinstance(handler, urllib.request.ProxyBasicAuthHandler):
                 handlers.append(urllib.request.ProxyBasicAuthHandler(handler.passwd))
             elif isinstance(handler, urllib.request.ProxyDigestAuthHandler):

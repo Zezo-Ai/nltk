@@ -143,6 +143,9 @@ def test_urlopen_honors_set_proxy_and_redirect_validation():
     """
     test_proxy = "http://proxy.example.com:8080"
 
+    # 1. Capture the pre-existing global state so we don't clobber it
+    original_opener = urllib.request._opener
+
     # Setup: Directly inject a ProxyHandler into the global opener
     # to strictly test pathsec's inheritance, bypassing environment-dependent nltk.set_proxy behavior.
     proxy_handler = urllib.request.ProxyHandler({"http": test_proxy})
@@ -183,4 +186,5 @@ def test_urlopen_honors_set_proxy_and_redirect_validation():
         ), "ProxyHandler instance was reused instead of copied! This breaks the global opener."
 
     finally:
-        urllib.request.install_opener(None)
+        # Teardown: Safely restore the original global opener, leaving no trace of this test
+        urllib.request.install_opener(original_opener)

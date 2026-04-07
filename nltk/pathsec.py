@@ -246,7 +246,18 @@ def urlopen(url, *args, **kwargs):
     """Secure wrapper for urllib.request.urlopen with redirect validation."""
     url_str = url.full_url if hasattr(url, "full_url") else str(url)
     validate_network_url(url_str, context="pathsec.urlopen")
-    opener = urllib.request.build_opener(_ValidatingRedirectHandler())
+
+    # Start with our security-enforcing redirect handler
+    handlers = [_ValidatingRedirectHandler()]
+
+    # Inherit existing global handlers (e.g., proxies set by nltk.set_proxy)
+    if urllib.request._opener is not None:
+        for handler in urllib.request._opener.handlers:
+            # Exclude existing redirect handlers to ensure our validator is used
+            if not isinstance(handler, urllib.request.HTTPRedirectHandler):
+                handlers.append(handler)
+
+    opener = urllib.request.build_opener(*handlers)
     return opener.open(url, *args, **kwargs)
 
 

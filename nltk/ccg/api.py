@@ -155,6 +155,8 @@ class Direction:
 
     def __init__(self, dir, restrictions):
         self._dir = dir
+        if isinstance(restrictions, (tuple, list)):
+            restrictions = "".join(r for r in restrictions if r)
         self._restrs = restrictions
         self._comparison_key = (dir, tuple(restrictions))
 
@@ -339,9 +341,13 @@ class FunctionalCategory(AbstractCCGCategory):
             sa = self._res.can_unify(other.res())
             sd = self._dir.can_unify(other.dir())
             if sa is not None and sd is not None:
-                sb = self._arg.substitute(sa).can_unify(other.arg().substitute(sa))
+                # Note: direction substitutions (sd) should theoretically be applied
+                # to the argument before unifying, just like result substitutions (sa).
+                # But at minimum, sd must be returned!
+                subs = sa + sd
+                sb = self._arg.substitute(subs).can_unify(other.arg().substitute(subs))
                 if sb is not None:
-                    return sa + sb
+                    return subs + sb
         return None
 
     # Constituent accessors

@@ -27,7 +27,7 @@ PRIM_RE = re.compile(r"""([A-Za-z]+)(\[[A-Za-z,]+\])?""")
 NEXTPRIM_RE = re.compile(r"""([A-Za-z]+(?:\[[A-Za-z,]+\])?)(.*)""")
 
 # Separates the next application operator from the remainder
-APP_RE = re.compile(r"""([\\/])([.,]?)([.,]?)(.*)""")
+APP_RE = re.compile(r"""([\\/])([.,_]?)([.,_]?)(.*)""")
 
 # Parses the definition of the right-hand side (rhs) of either a word or a family
 LEX_RE = re.compile(r"""([\S_]+)\s*(::|[-=]+>)\s*(.+)""", re.UNICODE)

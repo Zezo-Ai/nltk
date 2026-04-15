@@ -340,14 +340,18 @@ class FunctionalCategory(AbstractCCGCategory):
         if other.is_function():
             sa = self._res.can_unify(other.res())
             sd = self._dir.can_unify(other.dir())
+
             if sa is not None and sd is not None:
-                # Note: direction substitutions (sd) should theoretically be applied
-                # to the argument before unifying, just like result substitutions (sa).
-                # But at minimum, sd must be returned!
-                subs = sa + sd
-                sb = self._arg.substitute(subs).can_unify(other.arg().substitute(subs))
+                # Combine result and direction substitutions
+                base_subs = sa + sd
+
+                # Apply all known substitutions to the arguments before unifying them
+                sb = self._arg.substitute(base_subs).can_unify(
+                    other.arg().substitute(base_subs)
+                )
+
                 if sb is not None:
-                    return subs + sb
+                    return base_subs + sb
         return None
 
     # Constituent accessors

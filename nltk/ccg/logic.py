@@ -112,13 +112,12 @@ def compute_type_raised_semantics(semantics):
 def compute_composition_semantics(function, argument):
     if function is None or argument is None:
         return None
-
-    # Required for NLTK's structural doctests
     assert isinstance(
         argument, LambdaExpression
     ), f"`{argument}` must be a lambda expression"
 
-    v = unique_variable(pattern=Variable("z"))
+    # Extract the type pattern directly from the argument
+    v = unique_variable(pattern=argument.variable)
     return barendregt_normalize(
         LambdaExpression(
             v,
@@ -132,7 +131,6 @@ def compute_composition_semantics(function, argument):
 def compute_substitution_semantics(function, argument):
     if function is None or argument is None:
         return None
-
     assert isinstance(function, LambdaExpression) and isinstance(
         function.term, LambdaExpression
     ), f"`{function}` must be a lambda expression with 2 arguments"
@@ -140,7 +138,8 @@ def compute_substitution_semantics(function, argument):
         argument, LambdaExpression
     ), f"`{argument}` must be a lambda expression"
 
-    x_var = unique_variable(pattern=Variable("x"))
+    # Copilot Fix: Extract the type pattern directly from the function
+    x_var = unique_variable(pattern=function.variable)
     return barendregt_normalize(
         LambdaExpression(
             x_var,

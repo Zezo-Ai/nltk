@@ -1238,12 +1238,10 @@ class ApplicationExpression(Expression):
         function = self.function.simplify()
         argument = self.argument.simplify()
         if isinstance(function, LambdaExpression):
-            # Force the function to adopt unique bound variables before substitution
-            safe_function = function.alpha_convert(
-                unique_variable(pattern=function.variable)
-            )
-            return safe_function.term.replace(
-                safe_function.variable, argument, alpha_convert=True
+            # Rely strictly on NLTK's native capture-avoidance during substitution
+            # without burning global variable counters proactively.
+            return function.term.replace(
+                function.variable, argument, alpha_convert=True
             ).simplify()
         else:
             return self.__class__(function, argument)

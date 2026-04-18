@@ -7,86 +7,93 @@
 """
 Helper functions for CCG semantics computation
 """
-
 import copy
+import re
 
 from nltk.sem.logic import *
 
 
-def barendregt_normalize(expr, counter=None, prioritized_vars=None):
+def barendregt_normalize(expr, counters=None):
     """
-    Canonicalizes variables while preserving pedagogical names (F, P, x, y, z).
-    Ensures alpha-equivalent formulas produce identical strings.
+    Canonicalizes variables while preserving NLTK's prefix-based typing.
+    Ensures alpha-equivalent formulas produce identical strings without capture.
+    Draws from standard pools (x,y,z for individuals; F,G for functors).
     """
     if expr is None:
         return None
 
-    # Initialization for the root call
-    if counter is None:
+    if counters is None:
         expr = expr.simplify()
-        counter = [0]
-        # Default pedagogical sequence if no specific hint is provided
-        if prioritized_vars is None:
-            prioritized_vars = ["x", "y", "z", "P", "Q"]
+        counters = {}
 
     if isinstance(expr, VariableBinderExpression):
-        # Pick name from priority list, else fallback to numbered e
-        if counter[0] < len(prioritized_vars):
-            name = prioritized_vars[counter[0]]
+        # Extract the alphabetic prefix
+        match = re.match(r"^([A-Za-z_]+)", expr.variable.name)
+        base = match.group(1) if match else "v"
+
+        # Group into pedagogical type pools to satisfy NLTK's type constraints
+        # while maintaining standard x, y, z readability.
+        if base in ("x", "y", "z", "w"):
+            category, pool = "ind", ["x", "y", "z"]
+        elif base in ("P", "Q", "R"):
+            category, pool = "pred", ["P", "Q", "R"]
+        elif base in ("F", "G", "H"):
+            category, pool = "func", ["F", "G"]
+        elif base == "e":
+            category, pool = "event", ["e"]
         else:
-            name = f"e{counter[0] - len(prioritized_vars) + 1}"
+            category, pool = base, [base]
 
-        new_var = Variable(name)
-        counter[0] += 1
+        if category not in counters:
+            counters[category] = 0
 
-        # Execute alpha-conversion to prevent capture, then recurse
+        free_in_body = expr.term.free() - {expr.variable}
+
+        while True:
+            idx = counters[category]
+            pool_var = pool[idx % len(pool)]
+            suffix = idx // len(pool)
+            new_name = f"{pool_var}{suffix if suffix > 0 else ''}"
+            new_var = Variable(new_name)
+            counters[category] += 1
+
+            # Prevent capture with strictly external free variables
+            if new_var not in free_in_body:
+                break
+
         safe_expr = expr.alpha_convert(new_var)
         return safe_expr.__class__(
-            safe_expr.variable,
-            barendregt_normalize(safe_expr.term, counter, prioritized_vars),
+            safe_expr.variable, barendregt_normalize(safe_expr.term, counters)
         )
 
     elif isinstance(expr, ApplicationExpression):
         return ApplicationExpression(
-            barendregt_normalize(expr.function, counter, prioritized_vars),
-            barendregt_normalize(expr.argument, counter, prioritized_vars),
+            barendregt_normalize(expr.function, counters),
+            barendregt_normalize(expr.argument, counters),
         )
 
     elif isinstance(expr, BooleanExpression):
         return expr.__class__(
-            barendregt_normalize(expr.first, counter, prioritized_vars),
-            barendregt_normalize(expr.second, counter, prioritized_vars),
+            barendregt_normalize(expr.first, counters),
+            barendregt_normalize(expr.second, counters),
         )
 
     elif isinstance(expr, NegatedExpression):
-        return NegatedExpression(
-            barendregt_normalize(expr.term, counter, prioritized_vars)
-        )
+        return NegatedExpression(barendregt_normalize(expr.term, counters))
 
     elif isinstance(expr, EqualityExpression):
         return expr.__class__(
-            barendregt_normalize(expr.first, counter, prioritized_vars),
-            barendregt_normalize(expr.second, counter, prioritized_vars),
+            barendregt_normalize(expr.first, counters),
+            barendregt_normalize(expr.second, counters),
         )
 
     return expr
 
 
-from nltk.sem.logic import (
-    ApplicationExpression,
-    LambdaExpression,
-    Variable,
-    VariableExpression,
-    unique_variable,
-)
-
-
 def compute_function_semantics(function, argument):
     if function is None or argument is None:
         return None
-    return barendregt_normalize(
-        ApplicationExpression(function, argument), prioritized_vars=["x", "y", "z"]
-    )
+    return barendregt_normalize(ApplicationExpression(function, argument))
 
 
 def compute_type_raised_semantics(semantics):
@@ -98,8 +105,7 @@ def compute_type_raised_semantics(semantics):
         LambdaExpression(
             core,
             ApplicationExpression(VariableExpression(core), copy.deepcopy(semantics)),
-        ),
-        prioritized_vars=["F", "x", "y", "z", "P"],
+        )
     )
 
 
@@ -119,8 +125,7 @@ def compute_composition_semantics(function, argument):
             ApplicationExpression(
                 function, ApplicationExpression(argument, VariableExpression(v))
             ),
-        ),
-        prioritized_vars=["x", "y", "z"],
+        )
     )
 
 
@@ -128,10 +133,12 @@ def compute_substitution_semantics(function, argument):
     if function is None or argument is None:
         return None
 
-    # Required for NLTK's structural doctests
     assert isinstance(function, LambdaExpression) and isinstance(
         function.term, LambdaExpression
     ), f"`{function}` must be a lambda expression with 2 arguments"
+    assert isinstance(
+        argument, LambdaExpression
+    ), f"`{argument}` must be a lambda expression"
 
     x_var = unique_variable(pattern=Variable("x"))
     return barendregt_normalize(
@@ -141,6 +148,5 @@ def compute_substitution_semantics(function, argument):
                 ApplicationExpression(function, VariableExpression(x_var)),
                 ApplicationExpression(argument, VariableExpression(x_var)),
             ),
-        ),
-        prioritized_vars=["x", "y", "z"],
+        )
     )

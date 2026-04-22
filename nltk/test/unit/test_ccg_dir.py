@@ -65,7 +65,7 @@ class TestCCGDirection(unittest.TestCase):
         :- S, NP
         bad_word => (S\__NP)/(S\_NP)
         """
-        with self.assertRaises(Exception):
+        with self.assertRaises(AttributeError):
             lex = lexicon.fromstring(lex_str)
 
     def test_direction_equality_and_hashing(self):

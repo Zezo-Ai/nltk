@@ -73,9 +73,9 @@ class TnT(TaggerI):
                              l3*P(t_i| t_i-1, t_i-2)
 
     A beam search is used to limit the memory usage of the algorithm.
-    The degree of the beam can be changed using N in the initialization.
-    N represents the maximum number of possible solutions to maintain
-    while tagging.
+    The beam is controlled by a pruning threshold N after each step,
+    states whose probability is worse than the best
+    by more than a factor of N are discarded.
 
     It is possible to differentiate the tags which are assigned to
     capitalized words. However this does not result in a significant
@@ -91,7 +91,7 @@ class TnT(TaggerI):
         :type  unk: TaggerI
         :param Trained: Indication that the POS tagger is trained or not
         :type  Trained: bool
-        :param N: Beam search degree (see above)
+        :param N: Beam search pruning threshold
         :type  N: int
         :param C: Capitalization flag
         :type  C: bool
@@ -102,8 +102,9 @@ class TnT(TaggerI):
         _lx values represent the portion of the tri/bi/uni taggers
         to be used to calculate the probability
 
-        N value is the number of possible solutions to maintain
-        while tagging. A good value for this is 1000
+        N is the beam search pruning threshold: after scoring, any state
+        whose probability is worse than the best by more than a factor of
+        N is discarded. A good value for this is 1000.
 
         C is a boolean value which specifies to use or
         not use the Capitalization of the word as additional
@@ -166,7 +167,9 @@ class TnT(TaggerI):
                 # set local flag C to false for the next word
                 C = False
 
-            self._eos[t]["EOS"] += 1
+            # Key EOS by last tag to match model; skip empty sentences
+            if sent:
+                self._eos[history[-1]]["EOS"] += 1
 
         # compute lambda values from the trained frequency distributions
         self._compute_lambda()
@@ -198,7 +201,7 @@ class TnT(TaggerI):
 
         # for each t1,t2 in system
         for history in self._tri.conditions():
-            (h1, h2) = history
+            h1, h2 = history
 
             # for each t3 given t1,t2 in system
             # (NOTE: tag actually represents (tag,C))
@@ -235,13 +238,16 @@ class TnT(TaggerI):
                     tl3 += self._tri[history][tag] / 2.0
 
                 # if c1, and c2 are equal and larger than c3
-                # this might be a dumb thing to do....(not sure yet)
                 elif (c2 == c1) and (c1 > c3):
                     tl1 += self._tri[history][tag] / 2.0
                     tl2 += self._tri[history][tag] / 2.0
 
-                # otherwise there might be a problem
-                # eg: all values = 0
+                # if c1, and c3 are equal and larger than c2
+                elif (c1 == c3) and (c1 > c2):
+                    tl1 += self._tri[history][tag] / 2.0
+                    tl3 += self._tri[history][tag] / 2.0
+
+                # fallback for edge cases (all zero or sentinel values)
                 else:
                     pass
 
@@ -279,12 +285,12 @@ class TnT(TaggerI):
             res.append(res1)
         return res
 
-    def tag(self, data):
+    def tag(self, tokens):
         """
         Tags a single sentence
 
-        :param data: list of words
-        :type data: [string,]
+        :param tokens: list of words
+        :type tokens: [string,]
 
         :return: [(word, tag),]
 
@@ -297,16 +303,17 @@ class TnT(TaggerI):
         returns a list of (word, tag) tuples
         """
 
-        current_state = [(["BOS", "BOS"], 0.0)]
+        # seed BOS in the same (tag, C) form stored during training
+        current_state = [([("BOS", False), ("BOS", False)], 0.0)]
 
-        sent = list(data)
+        sent = list(tokens)
 
         tags = self._tagword(sent, current_state)
 
         res = []
         for i in range(len(sent)):
             # unpack and discard the C flags
-            (t, C) = tags[i + 2]
+            t, C = tags[i + 2]
             res.append((sent[i], t))
 
         return res
@@ -327,11 +334,17 @@ class TnT(TaggerI):
         of a particular tag
         """
 
-        # if this word marks the end of the sentence,
-        # return the most probable tag
+        # if word marks end of sentence, apply P(EOS | t_T) and return best tag
         if sent == []:
-            (h, logp) = current_states[0]
-            return h
+            best_h, best_logp = current_states[0][0], None
+            for history, logp in current_states:
+                eos_count = self._eos[history[-1]]["EOS"]
+                tag_count = self._uni[history[-1]]
+                if eos_count > 0 and tag_count > 0:
+                    logp += log(eos_count / tag_count, 2)
+                if best_logp is None or logp > best_logp:
+                    best_h, best_logp = history, logp
+            return best_h
 
         # otherwise there are more words to be tagged
         word = sent[0]
@@ -396,10 +409,10 @@ class TnT(TaggerI):
         # set is now ordered greatest to least log probability
         new_states.sort(reverse=True, key=itemgetter(1))
 
-        # del everything after N (threshold)
-        # this is the beam search cut
-        if len(new_states) > self._N:
-            new_states = new_states[: self._N]
+        # drop states worse than the best by more than log2(N)
+        best_logp = new_states[0][1]
+        cutoff = best_logp - log(self._N, 2)
+        new_states = [s for s in new_states if s[1] >= cutoff]
 
         # compute the tags for the rest of the sentence
         # return the best list of tags for the sentence

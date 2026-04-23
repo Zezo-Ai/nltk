@@ -117,7 +117,6 @@ class TnT(TaggerI):
         self._bi = ConditionalFreqDist()
         self._tri = ConditionalFreqDist()
         self._wd = ConditionalFreqDist()
-        self._eos = ConditionalFreqDist()
         self._l1 = 0.0
         self._l2 = 0.0
         self._l3 = 0.0
@@ -167,12 +166,20 @@ class TnT(TaggerI):
                 # set local flag C to false for the next word
                 C = False
 
-            # Key EOS by last tag to match model; skip empty sentences
+            # record EOS transition with deleted interpolation
+            # skip empty sentences to avoid attributing count to BOS
             if sent:
-                self._eos[history[-1]]["EOS"] += 1
+                eos = ("EOS", False)
+                self._uni[eos] += 1
+                self._bi[history[-1]][eos] += 1
+                self._tri[tuple(history)][eos] += 1
 
         # compute lambda values from the trained frequency distributions
         self._compute_lambda()
+
+        # mark as trained so repeat train() calls don't retrain the
+        # optional unk tagger (see unk handling at the top of this method)
+        self._T = True
 
     def _compute_lambda(self):
         """
@@ -246,6 +253,12 @@ class TnT(TaggerI):
                 elif (c1 == c3) and (c1 > c2):
                     tl1 += self._tri[history][tag] / 2.0
                     tl3 += self._tri[history][tag] / 2.0
+
+                # if all three are equal (and not the safe_div -1 sentinel)
+                elif (c1 == c2) and (c2 == c3) and (c1 >= 0):
+                    tl1 += self._tri[history][tag] / 3.0
+                    tl2 += self._tri[history][tag] / 3.0
+                    tl3 += self._tri[history][tag] / 3.0
 
                 # fallback for edge cases (all zero or sentinel values)
                 else:
@@ -334,14 +347,17 @@ class TnT(TaggerI):
         of a particular tag
         """
 
-        # if word marks end of sentence, apply P(EOS | t_T) and return best tag
+        # if word marks end of sentence, score the EOS transition with the
+        # same deleted interpolation used for normal tags and return best path
         if sent == []:
+            eos = ("EOS", False)
+            p_uni = self._uni.freq(eos)
             best_h, best_logp = current_states[0][0], None
             for history, logp in current_states:
-                eos_count = self._eos[history[-1]]["EOS"]
-                tag_count = self._uni[history[-1]]
-                if eos_count > 0 and tag_count > 0:
-                    logp += log(eos_count / tag_count, 2)
+                p_bi = self._bi[history[-1]].freq(eos)
+                p_tri = self._tri[tuple(history[-2:])].freq(eos)
+                p = self._l1 * p_uni + self._l2 * p_bi + self._l3 * p_tri
+                logp += log(max(p, 1e-300), 2)
                 if best_logp is None or logp > best_logp:
                     best_h, best_logp = history, logp
             return best_h
@@ -364,8 +380,6 @@ class TnT(TaggerI):
             self.known += 1
 
             for history, curr_sent_logprob in current_states:
-                logprobs = []
-
                 for t in self._wd[word].keys():
                     tC = (t, C)
                     p_uni = self._uni.freq(tC)
@@ -373,7 +387,7 @@ class TnT(TaggerI):
                     p_tri = self._tri[tuple(history[-2:])].freq(tC)
                     p_wd = self._wd[word][t] / self._uni[tC]
                     p = self._l1 * p_uni + self._l2 * p_bi + self._l3 * p_tri
-                    p2 = log(p, 2) + log(p_wd, 2)
+                    p2 = log(max(p, 1e-300), 2) + log(p_wd, 2)
 
                     # compute the result of appending each tag to this history
                     new_states.append((history + [tC], curr_sent_logprob + p2))
@@ -381,12 +395,6 @@ class TnT(TaggerI):
         # otherwise a new word, set of possible tags is unknown
         else:
             self.unknown += 1
-
-            # since a set of possible tags,
-            # and the probability of each specific tag
-            # can not be returned from most classifiers:
-            # specify that any unknown words are tagged with certainty
-            p = 1
 
             # if no unknown word tagger has been specified
             # then use the tag 'Unk'
@@ -398,7 +406,7 @@ class TnT(TaggerI):
                 [(_w, t)] = list(self._unk.tag([word]))
                 tag = (t, C)
 
-            for history, logprob in current_states:
+            for history, _ in current_states:
                 history.append(tag)
 
             new_states = current_states

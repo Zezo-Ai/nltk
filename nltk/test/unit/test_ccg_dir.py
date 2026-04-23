@@ -1,10 +1,12 @@
 import unittest
 
 from nltk.ccg import lexicon
-from nltk.ccg.api import Direction
+from nltk.ccg.api import Direction, FunctionalCategory, PrimitiveCategory
 
 
 class TestCCGDirection(unittest.TestCase):
+
+    # --- Parser and Unification Tests (PR #3556) ---
 
     def test_parse_variable_direction(self):
         """
@@ -19,7 +21,6 @@ class TestCCGDirection(unittest.TestCase):
 
         quickly_token = lex.categories("quickly")[0]
         quickly_cat = quickly_token.categ()
-
         var_direction = quickly_cat.res().dir()
 
         self.assertTrue(
@@ -50,7 +51,6 @@ class TestCCGDirection(unittest.TestCase):
         subs = quickly_cat.res().can_unify(walked_cat)
 
         self.assertIsNotNone(subs, "Unification failed entirely.")
-
         substituted_vars = [var for var, val in subs]
         self.assertIn(
             "_", substituted_vars, "can_unify dropped the direction variable mapping!"
@@ -65,9 +65,7 @@ class TestCCGDirection(unittest.TestCase):
         :- S, NP
         bad_word => (S\__NP)/(S\_NP)
         """
-
-        # Replace 'Exception' with the specific error NLTK throws (e.g., ValueError)
-        with self.assertRaises(Exception):
+        with self.assertRaises(AttributeError):
             lex = lexicon.fromstring(lex_str)
 
     def test_direction_equality_and_hashing(self):
@@ -89,6 +87,41 @@ class TestCCGDirection(unittest.TestCase):
             hash(parsed_dir),
             "Directions with coerced tuples do not hash equally!",
         )
+
+    # --- Substitution Tests (PR #3547 & Legacy) ---
+
+    def test_substitute_applies_to_direction(self):
+        """
+        Direction substitutions must propagate through substitute().
+        Regression test updated to expect string restrictions instead of lists.
+        """
+        res = PrimitiveCategory("S")
+        arg = PrimitiveCategory("NP")
+        variable_dir = Direction("/", "_")
+        category = FunctionalCategory(res, arg, variable_dir)
+
+        # Replaced list ["."] with string "."
+        new_restrictions = "."
+        subs = [("_", new_restrictions)]
+        result = category.substitute(subs)
+
+        self.assertFalse(result.dir().is_variable())
+        self.assertEqual(result.dir().restrs(), new_restrictions)
+
+    def test_substitute_no_op_on_concrete_direction(self):
+        """
+        Substitution on a non-variable direction should be a no-op.
+        Regression test updated to pass and expect string restrictions.
+        """
+        res = PrimitiveCategory("S")
+        arg = PrimitiveCategory("NP")
+        # Replaced list ["."] with string "."
+        concrete_dir = Direction("\\", ".")
+        category = FunctionalCategory(res, arg, concrete_dir)
+
+        result = category.substitute([("_", ",")])
+
+        self.assertEqual(result.dir().restrs(), ".")
 
 
 if __name__ == "__main__":

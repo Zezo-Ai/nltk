@@ -29,10 +29,13 @@ class TnT(TaggerI):
 
     IMPORTANT NOTES:
 
-    * DOES NOT AUTOMATICALLY DEAL WITH UNSEEN WORDS
+    * HANDLES UNSEEN WORDS VIA BRANTS' SUFFIX MODEL
 
-      - It is possible to provide an untrained POS tagger to
-        create tags for unknown words, see __init__ function
+      - Unknown words are tagged using the suffix-based distribution
+        described in Brants (2000) section 2.3, smoothed by successive
+        abstraction and scored via Bayesian inversion.
+      - An external POS tagger may still be supplied via the ``unk``
+        parameter to override the suffix model, see __init__ function.
 
     * SHOULD BE USED WITH SENTENCE-DELIMITED INPUT
 
@@ -131,6 +134,13 @@ class TnT(TaggerI):
         self._uni_N = 0
         self._log2_N = 0.0
 
+        # Suffix model state for unknown words. Two tries split by word
+        # capitalization, plus the smoothing weight and tag priors used
+        # by the recursion at decode time.
+        self._suffix = {False: ConditionalFreqDist(), True: ConditionalFreqDist()}
+        self._tag_priors = {}
+        self._suffix_theta = 0.0
+
         self._unk = unk
 
         # statistical tools (ignore or delete me)
@@ -188,8 +198,56 @@ class TnT(TaggerI):
         self._uni_N = self._uni.N()
         self._log2_N = log2(self._N)
 
+        # Populate the suffix model used by the unknown-word path.
+        self._build_suffix_model()
+
         # Prevents repeat train() calls from retraining the optional unk tagger.
         self._T = True
+
+    def _build_suffix_model(self):
+        """
+        Populate the suffix tries, tag priors, and smoothing weight used by
+        the unknown-word model from Brants (2000), section 2.3.
+
+        Tag priors are over raw tags (summed across capitalization flags)
+        and exclude the EOS pseudo-tag. Suffix statistics are drawn only
+        from lexicon words with total count of 10 or fewer, matching the
+        paper's infrequent-words threshold.
+        """
+        # Tag priors over raw tags (excluding EOS), P(t) = f(t) / sum_t' f(t')
+        tag_counts = {}
+        for (t, _C), count in self._uni.items():
+            if t == "EOS":
+                continue
+            tag_counts[t] = tag_counts.get(t, 0) + count
+        total = sum(tag_counts.values())
+        if total > 0:
+            self._tag_priors = {t: c / total for t, c in tag_counts.items()}
+        else:
+            self._tag_priors = {}
+
+        # theta is the standard deviation of the unconditioned tag priors.
+        # This is the sample standard deviation per the paper's formula.
+        priors = list(self._tag_priors.values())
+        n = len(priors)
+        if n > 1:
+            mean = sum(priors) / n
+            self._suffix_theta = (sum((p - mean) ** 2 for p in priors) / (n - 1)) ** 0.5
+        else:
+            self._suffix_theta = 0.0
+
+        # Build the two suffix tries from infrequent lexicon words only.
+        self._suffix = {False: ConditionalFreqDist(), True: ConditionalFreqDist()}
+        for word in self._wd.conditions():
+            if self._wd[word].N() > 10:
+                continue
+            cap = word[0].isupper()
+            trie = self._suffix[cap]
+            max_m = min(len(word), 10)
+            for m in range(1, max_m + 1):
+                suffix = word[-m:]
+                for t, count in self._wd[word].items():
+                    trie[suffix][t] += count
 
     def _compute_lambda(self):
         """
@@ -286,6 +344,85 @@ class TnT(TaggerI):
         else:
             return v1 / v2
 
+    def _unknown_tag_scores(self, word):
+        """
+        Score candidate tags for an unknown word using the suffix model
+        from Brants (2000), section 2.3, with successive abstraction and
+        Bayesian inversion.
+
+        Starts from the unigram tag prior and absorbs one extra suffix
+        character at a time up to the longest known suffix (capped at
+        10 characters). The smoothing recursion is
+
+            P(t | l_{n-i+1}...l_n) = (P_hat + theta * P_prev) / (1 + theta)
+
+        Returns a mapping from raw tag to P(suffix | t) up to a constant.
+        The constant P(suffix) is dropped because it does not depend on
+        the tag and therefore does not affect the argmax. Tags with zero
+        prior are omitted.
+        """
+        if not self._tag_priors:
+            return {}
+
+        cap = word[0].isupper()
+        trie = self._suffix[cap]
+        theta = self._suffix_theta
+
+        # Find the longest known suffix by scanning from 10 down to 1.
+        # If none is found, the loop below leaves P at the unigram prior.
+        longest = 0
+        for m in range(min(len(word), 10), 0, -1):
+            if word[-m:] in trie:
+                longest = m
+                break
+
+        # Successive abstraction from the prior up to the longest suffix.
+        P = dict(self._tag_priors)
+        denom = 1.0 + theta
+        for i in range(1, longest + 1):
+            suffix_dist = trie[word[-i:]]
+            suffix_N = suffix_dist.N()
+            if suffix_N == 0:
+                continue
+            inv_N = 1.0 / suffix_N
+            P = {
+                t: (suffix_dist[t] * inv_N + theta * P[t]) / denom
+                for t in self._tag_priors
+            }
+
+        # Apply Bayesian inversion so the result ranks by P(suffix | t),
+        # which is proportional to P(t | suffix) / P(t).
+        return {t: P[t] / prior for t, prior in self._tag_priors.items() if prior > 0}
+
+    def _expand_beam(self, current_states, tag_info):
+        """
+        Expand each state in the beam over every candidate in tag_info.
+
+        tag_info is a list of (tC, p_uni, log_emit) triples where tC is
+        the candidate (tag, C) pair, p_uni is its unigram probability,
+        and log_emit is the per-tag emission term already in log2 space.
+        The transition uses the same deleted interpolation as everywhere
+        else, floored before log2 to avoid log(0) on an all-zero context.
+
+        Used by both the known-word and the suffix-based unknown-word
+        paths so the inner expansion only lives in one place.
+        """
+        l1, l2, l3 = self._l1, self._l2, self._l3
+        bi, tri = self._bi, self._tri
+        new_states = []
+        for history, curr_logp in current_states:
+            bi_dist = bi[history[-1]]
+            tri_dist = tri[(history[-2], history[-1])]
+            bi_N = bi_dist.N()
+            tri_N = tri_dist.N()
+            inv_bi = (1.0 / bi_N) if bi_N else 0.0
+            inv_tri = (1.0 / tri_N) if tri_N else 0.0
+            for tC, p_uni, log_emit in tag_info:
+                p = l1 * p_uni + l2 * bi_dist[tC] * inv_bi + l3 * tri_dist[tC] * inv_tri
+                lp = (log2(p) if p > 1e-300 else _LOG_FLOOR_2) + log_emit
+                new_states.append((history + [tC], curr_logp + lp))
+        return new_states
+
     def tagdata(self, data):
         """
         Tags each sentence in a list of sentences
@@ -381,37 +518,39 @@ class TnT(TaggerI):
                     p_uni = (uni_tC / uni_N) if uni_N else 0
                     tag_info.append((tC, p_uni, log2(wc / uni_tC)))
 
-                # Per-history hoists fetch the bi/tri dists and their sizes once per history iteration.
-                for history, curr_logp in current_states:
-                    bi_dist = bi[history[-1]]
-                    tri_dist = tri[(history[-2], history[-1])]
-                    bi_N = bi_dist.N()
-                    tri_N = tri_dist.N()
-                    inv_bi = (1.0 / bi_N) if bi_N else 0.0
-                    inv_tri = (1.0 / tri_N) if tri_N else 0.0
-                    for tC, p_uni, log_p_wd in tag_info:
-                        p = (
-                            l1 * p_uni
-                            + l2 * bi_dist[tC] * inv_bi
-                            + l3 * tri_dist[tC] * inv_tri
-                        )
-                        # Floor p so log2() is safe when all three n-gram components are zero for this (tag | context).
-                        lp = (log2(p) if p > 1e-300 else _LOG_FLOOR_2) + log_p_wd
-                        new_states.append((history + [tC], curr_logp + lp))
+                new_states = self._expand_beam(current_states, tag_info)
 
             else:
                 self.unknown += 1
 
-                # external tagger if provided, otherwise emit the literal tag "Unk"
-                if self._unk is None:
-                    tag = ("Unk", C)
-                else:
+                if self._unk is not None:
+                    # External unk tagger overrides the suffix model.
                     [(_w, t)] = self._unk.tag([word])
                     tag = (t, C)
-
-                for history, _ in current_states:
-                    history.append(tag)
-                new_states = current_states
+                    for history, _ in current_states:
+                        history.append(tag)
+                    new_states = current_states
+                else:
+                    # Score this unknown word against every candidate tag
+                    # using the Bayes-inverted suffix posterior, then
+                    # expand the beam the same way the known-word path does.
+                    tag_scores = self._unknown_tag_scores(word)
+                    if not tag_scores:
+                        # Fall back to a literal "Unk" tag when there is
+                        # no prior to score against, for example when the
+                        # tagger has not been trained.
+                        tag = ("Unk", C)
+                        for history, _ in current_states:
+                            history.append(tag)
+                        new_states = current_states
+                    else:
+                        tag_info = []
+                        for t, score in tag_scores.items():
+                            tC = (t, C)
+                            p_uni = (uni[tC] / uni_N) if uni_N else 0
+                            log_score = log2(score) if score > 1e-300 else _LOG_FLOOR_2
+                            tag_info.append((tC, p_uni, log_score))
+                        new_states = self._expand_beam(current_states, tag_info)
 
             # Sort by log prob and threshold-prune
             # drop states worse than the best by more than log2(N).
@@ -470,7 +609,6 @@ def basic_sent_chop(data, raw=True):
 
     new_data = []
     curr_sent = []
-    # Brants (2000) §2.1 lists [.!?;] as the sentence boundary set.
     sent_mark = [".", "!", "?", ";"]
 
     if raw:

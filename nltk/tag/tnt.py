@@ -224,13 +224,8 @@ class TnT(TaggerI):
             # (NOTE: tag actually represents (tag,C))
             # However no effect within this function
             for tag in self._tri[history].keys():
-                # if there has only been 1 occurrence of this tag in the data
-                # then ignore this trigram.
-                if self._uni[tag] == 1:
-                    continue
-
                 # safe_div provides a safe floating point division
-                # it returns -1 if the denominator is 0
+                # it returns 0 if the denominator is 0
                 c3 = self._safe_div(
                     (self._tri[history][tag] - 1), (self._tri[history].N() - 1)
                 )
@@ -264,13 +259,14 @@ class TnT(TaggerI):
                     tl1 += self._tri[history][tag] / 2.0
                     tl3 += self._tri[history][tag] / 2.0
 
-                # if all three are equal (and not the safe_div -1 sentinel)
-                elif (c1 == c2) and (c2 == c3) and (c1 >= 0):
+                # if all three are equal
+                elif (c1 == c2) and (c2 == c3):
                     tl1 += self._tri[history][tag] / 3.0
                     tl2 += self._tri[history][tag] / 3.0
                     tl3 += self._tri[history][tag] / 3.0
 
-                # fallback for edge cases (all zero or sentinel values)
+                # otherwise there might be a problem
+                # eg: all values = 0
                 else:
                     pass
 
@@ -283,10 +279,10 @@ class TnT(TaggerI):
     def _safe_div(self, v1, v2):
         """
         Safe floating point division function, does not allow division by 0
-        returns -1 if the denominator is 0
+        returns 0 if the denominator is 0
         """
         if v2 == 0:
-            return -1
+            return 0
         else:
             return v1 / v2
 
@@ -474,7 +470,8 @@ def basic_sent_chop(data, raw=True):
 
     new_data = []
     curr_sent = []
-    sent_mark = [",", ".", "?", "!"]
+    # Brants (2000) §2.1 lists [.!?;] as the sentence boundary set.
+    sent_mark = [".", "!", "?", ";"]
 
     if raw:
         for word in data:

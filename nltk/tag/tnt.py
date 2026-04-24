@@ -13,11 +13,14 @@ by Thorsten Brants
 https://aclanthology.org/A00-1031.pdf
 """
 
-from math import log
+from math import log2
 from operator import itemgetter
 
 from nltk.probability import ConditionalFreqDist, FreqDist
 from nltk.tag.api import TaggerI
+
+# Returned in place of log2(p) when p is zero; log2(1e-300) ~= -996.58.
+_LOG_FLOOR_2 = log2(1e-300)
 
 
 class TnT(TaggerI):
@@ -124,6 +127,10 @@ class TnT(TaggerI):
         self._C = C
         self._T = Trained
 
+        # cached after train() for the decode hot path
+        self._uni_N = 0
+        self._log2_N = 0.0
+
         self._unk = unk
 
         # statistical tools (ignore or delete me)
@@ -166,8 +173,8 @@ class TnT(TaggerI):
                 # set local flag C to false for the next word
                 C = False
 
-            # record EOS transition with deleted interpolation
-            # skip empty sentences to avoid attributing count to BOS
+            # Record EOS as a pseudo-tag in the n-gram counts. Empty sentences are skipped
+            # because their history[-1] is still BOS and would absorb the count.
             if sent:
                 eos = ("EOS", False)
                 self._uni[eos] += 1
@@ -177,8 +184,11 @@ class TnT(TaggerI):
         # compute lambda values from the trained frequency distributions
         self._compute_lambda()
 
-        # mark as trained so repeat train() calls don't retrain the
-        # optional unk tagger (see unk handling at the top of this method)
+        # cache constants used in the decode hot path
+        self._uni_N = self._uni.N()
+        self._log2_N = log2(self._N)
+
+        # Prevents repeat train() calls from retraining the optional unk tagger.
         self._T = True
 
     def _compute_lambda(self):
@@ -340,91 +350,96 @@ class TnT(TaggerI):
                                 associated with each tag combination
         :type current_states  : [([tag, ], logprob), ]
 
-        Tags the first word in the sentence and
-        recursively tags the reminder of sentence
+        Iteratively tags each word in the sentence, maintaining a beam of
+        candidate tag sequences and their log probabilities. After the last
+        word, scores the EOS transition and returns the best path.
 
         Uses formula specified above to calculate the probability
-        of a particular tag
+        of a particular tag.
         """
 
-        # if word marks end of sentence, score the EOS transition with the
-        # same deleted interpolation used for normal tags and return best path
-        if sent == []:
-            eos = ("EOS", False)
-            p_uni = self._uni.freq(eos)
-            best_h, best_logp = current_states[0][0], None
-            for history, logp in current_states:
-                p_bi = self._bi[history[-1]].freq(eos)
-                p_tri = self._tri[tuple(history[-2:])].freq(eos)
-                p = self._l1 * p_uni + self._l2 * p_bi + self._l3 * p_tri
-                logp += log(max(p, 1e-300), 2)
-                if best_logp is None or logp > best_logp:
-                    best_h, best_logp = history, logp
-            return best_h
+        # local bindings avoid repeated attribute lookups in the hot loop
+        wd = self._wd
+        bi = self._bi
+        tri = self._tri
+        uni = self._uni
+        uni_N = self._uni_N
+        l1, l2, l3 = self._l1, self._l2, self._l3
+        log2_N = self._log2_N
+        cap_on = self._C
 
-        # otherwise there are more words to be tagged
-        word = sent[0]
-        sent = sent[1:]
-        new_states = []
+        for word in sent:
+            new_states = []
+            C = cap_on and word[0].isupper()
 
-        # if the Capitalisation is requested,
-        # initialise the flag for this word
-        C = False
-        if self._C and word[0].isupper():
-            C = True
+            # if word is known, expand each state by each tag seen with it
+            if word in wd:
+                self.known += 1
+                wd_word = wd[word]
 
-        # if word is known
-        # compute the set of possible tags
-        # and their associated log probabilities
-        if word in self._wd:
-            self.known += 1
-
-            for history, curr_sent_logprob in current_states:
-                for t in self._wd[word].keys():
+                # Per-tag constants depend on the candidate tag, not on the history being extended.
+                tag_info = []
+                for t, wc in wd_word.items():
                     tC = (t, C)
-                    p_uni = self._uni.freq(tC)
-                    p_bi = self._bi[history[-1]].freq(tC)
-                    p_tri = self._tri[tuple(history[-2:])].freq(tC)
-                    p_wd = self._wd[word][t] / self._uni[tC]
-                    p = self._l1 * p_uni + self._l2 * p_bi + self._l3 * p_tri
-                    p2 = log(max(p, 1e-300), 2) + log(p_wd, 2)
+                    uni_tC = uni[tC]
+                    p_uni = (uni_tC / uni_N) if uni_N else 0
+                    tag_info.append((tC, p_uni, log2(wc / uni_tC)))
 
-                    # compute the result of appending each tag to this history
-                    new_states.append((history + [tC], curr_sent_logprob + p2))
+                # Per-history hoists fetch the bi/tri dists and their sizes once per history iteration.
+                for history, curr_logp in current_states:
+                    bi_dist = bi[history[-1]]
+                    tri_dist = tri[(history[-2], history[-1])]
+                    bi_N = bi_dist.N()
+                    tri_N = tri_dist.N()
+                    inv_bi = (1.0 / bi_N) if bi_N else 0.0
+                    inv_tri = (1.0 / tri_N) if tri_N else 0.0
+                    for tC, p_uni, log_p_wd in tag_info:
+                        p = (
+                            l1 * p_uni
+                            + l2 * bi_dist[tC] * inv_bi
+                            + l3 * tri_dist[tC] * inv_tri
+                        )
+                        # Floor p so log2() is safe when all three n-gram components are zero for this (tag | context).
+                        lp = (log2(p) if p > 1e-300 else _LOG_FLOOR_2) + log_p_wd
+                        new_states.append((history + [tC], curr_logp + lp))
 
-        # otherwise a new word, set of possible tags is unknown
-        else:
-            self.unknown += 1
-
-            # if no unknown word tagger has been specified
-            # then use the tag 'Unk'
-            if self._unk is None:
-                tag = ("Unk", C)
-
-            # otherwise apply the unknown word tagger
             else:
-                [(_w, t)] = list(self._unk.tag([word]))
-                tag = (t, C)
+                self.unknown += 1
 
-            for history, _ in current_states:
-                history.append(tag)
+                # external tagger if provided, otherwise emit the literal tag "Unk"
+                if self._unk is None:
+                    tag = ("Unk", C)
+                else:
+                    [(_w, t)] = self._unk.tag([word])
+                    tag = (t, C)
 
-            new_states = current_states
+                for history, _ in current_states:
+                    history.append(tag)
+                new_states = current_states
 
-        # now have computed a set of possible new_states
+            # Sort by log prob and threshold-prune
+            # drop states worse than the best by more than log2(N).
+            new_states.sort(reverse=True, key=itemgetter(1))
+            cutoff = new_states[0][1] - log2_N
+            current_states = [s for s in new_states if s[1] >= cutoff]
 
-        # sort states by log prob
-        # set is now ordered greatest to least log probability
-        new_states.sort(reverse=True, key=itemgetter(1))
-
-        # drop states worse than the best by more than log2(N)
-        best_logp = new_states[0][1]
-        cutoff = best_logp - log(self._N, 2)
-        new_states = [s for s in new_states if s[1] >= cutoff]
-
-        # compute the tags for the rest of the sentence
-        # return the best list of tags for the sentence
-        return self._tagword(sent, new_states)
+        # Score the EOS transition with the same deleted interpolation used for every tag, then return the best path.
+        eos = ("EOS", False)
+        p_uni_eos = (uni[eos] / uni_N) if uni_N else 0
+        best_h = current_states[0][0]
+        best_logp = float("-inf")
+        for history, logp in current_states:
+            bi_dist = bi[history[-1]]
+            tri_dist = tri[(history[-2], history[-1])]
+            bi_N = bi_dist.N()
+            tri_N = tri_dist.N()
+            p_bi = (bi_dist[eos] / bi_N) if bi_N else 0
+            p_tri = (tri_dist[eos] / tri_N) if tri_N else 0
+            p = l1 * p_uni_eos + l2 * p_bi + l3 * p_tri
+            logp += log2(p) if p > 1e-300 else _LOG_FLOOR_2
+            if logp > best_logp:
+                best_h, best_logp = history, logp
+        return best_h
 
 
 ########################################

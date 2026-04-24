@@ -14,7 +14,6 @@ https://aclanthology.org/A00-1031.pdf
 """
 
 from math import log2
-from operator import itemgetter
 
 from nltk.probability import ConditionalFreqDist, FreqDist
 from nltk.tag.api import TaggerI
@@ -206,13 +205,17 @@ class TnT(TaggerI):
 
     def _build_suffix_model(self):
         """
-        Populate the suffix tries, tag priors, and smoothing weight used by
-        the unknown-word model from Brants (2000), section 2.3.
+        Build the suffix-based language model TnT uses for unseen words.
+        Populates two capitalization-split suffix tries, the smoothing
+        weight `theta`, and a unigram tag prior. These are the three
+        pieces that `_unknown_tag_scores` reads at decode time.
 
-        Tag priors are over raw tags (summed across capitalization flags)
-        and exclude the EOS pseudo-tag. Suffix statistics are drawn only
-        from lexicon words with total count of 10 or fewer, matching the
-        paper's infrequent-words threshold.
+        The priors exclude the EOS pseudo-tag (a sequence marker, not a
+        lexical tag) and sum across capitalization. Suffix statistics
+        come only from lexicon words with count of 10 or fewer, the
+        "infrequent words" threshold from Brants (2000) section 2.3,
+        on the reasoning that frequent words tell us little about what
+        unseen words might look like.
         """
         # Tag priors over raw tags (excluding EOS), P(t) = f(t) / sum_t' f(t')
         tag_counts = {}
@@ -346,20 +349,27 @@ class TnT(TaggerI):
 
     def _unknown_tag_scores(self, word):
         """
-        Score candidate tags for an unknown word using the suffix model
-        from Brants (2000), section 2.3, with successive abstraction and
-        Bayesian inversion.
+        Score candidate tags for an unknown word using Brants's suffix
+        model.
 
-        Starts from the unigram tag prior and absorbs one extra suffix
-        character at a time up to the longest known suffix (capped at
-        10 characters). The smoothing recursion is
+        The intuition is that a word's last few characters predict its
+        tag well, since `-able` words tend to be adjectives, `-ing`
+        words tend to be participles, and so on. Starting from the
+        unigram tag prior, we walk one suffix character at a time up
+        to the longest suffix we saw during training (capped at 10
+        characters), blending each suffix's tag distribution into the
+        running estimate via the successive abstraction recursion
 
             P(t | l_{n-i+1}...l_n) = (P_hat + theta * P_prev) / (1 + theta)
 
-        Returns a mapping from raw tag to P(suffix | t) up to a constant.
-        The constant P(suffix) is dropped because it does not depend on
-        the tag and therefore does not affect the argmax. Tags with zero
-        prior are omitted.
+        If the word's tail is unfamiliar, the recursion never gets past
+        the prior, which is the back-off case.
+
+        :return: Bayes-inverted scores. Each raw tag maps to a quantity
+                 proportional to P(suffix | t). The P(suffix) constant
+                 drops out because it does not depend on the tag, which
+                 preserves the argmax without computing it. Tags with
+                 zero prior are omitted.
         """
         if not self._tag_priors:
             return {}
@@ -394,25 +404,32 @@ class TnT(TaggerI):
         # which is proportional to P(t | suffix) / P(t).
         return {t: P[t] / prior for t, prior in self._tag_priors.items() if prior > 0}
 
-    def _expand_beam(self, current_states, tag_info):
+    def _expand_states(self, states, tag_info):
         """
-        Expand each state in the beam over every candidate in tag_info.
+        Take one Viterbi step. For every predecessor state we score
+        each candidate `t_curr` from `tag_info` and accumulate the
+        results into a new state dict keyed by `(t_prev, t_curr)`.
+        When two predecessors land on the same key we keep the
+        higher-scoring one and discard the other. The second-order
+        Markov assumption means everything after this point depends
+        only on the last two tags, so the discarded path can never
+        beat the kept one.
 
-        tag_info is a list of (tC, p_uni, log_emit) triples where tC is
-        the candidate (tag, C) pair, p_uni is its unigram probability,
-        and log_emit is the per-tag emission term already in log2 space.
-        The transition uses the same deleted interpolation as everywhere
-        else, floored before log2 to avoid log(0) on an all-zero context.
+        `tag_info` is a list of `(tC, p_uni, log_emit)` triples for
+        the candidate `t_curr` values. Transitions use the same
+        deleted interpolation as on the known-word path, floored
+        before log2 to avoid blowing up on an all-zero context.
 
-        Used by both the known-word and the suffix-based unknown-word
-        paths so the inner expansion only lives in one place.
+        :return: dict mapping `(t_prev, t_curr)` to `(logp, t_prev2)`.
+                 `t_prev2` is the backpointer used to reconstruct the
+                 best path after the final EOS step.
         """
         l1, l2, l3 = self._l1, self._l2, self._l3
         bi, tri = self._bi, self._tri
-        new_states = []
-        for history, curr_logp in current_states:
-            bi_dist = bi[history[-1]]
-            tri_dist = tri[(history[-2], history[-1])]
+        new_states = {}
+        for (t_prev2, t_prev), (curr_logp, _) in states.items():
+            bi_dist = bi[t_prev]
+            tri_dist = tri[(t_prev2, t_prev)]
             bi_N = bi_dist.N()
             tri_N = tri_dist.N()
             inv_bi = (1.0 / bi_N) if bi_N else 0.0
@@ -420,7 +437,11 @@ class TnT(TaggerI):
             for tC, p_uni, log_emit in tag_info:
                 p = l1 * p_uni + l2 * bi_dist[tC] * inv_bi + l3 * tri_dist[tC] * inv_tri
                 lp = (log2(p) if p > 1e-300 else _LOG_FLOOR_2) + log_emit
-                new_states.append((history + [tC], curr_logp + lp))
+                total_logp = curr_logp + lp
+                new_key = (t_prev, tC)
+                existing = new_states.get(new_key)
+                if existing is None or total_logp > existing[0]:
+                    new_states[new_key] = (total_logp, t_prev2)
         return new_states
 
     def tagdata(self, data):
@@ -443,53 +464,37 @@ class TnT(TaggerI):
 
     def tag(self, tokens):
         """
-        Tags a single sentence
+        Tag a single sentence. Delegates the actual decode to
+        `_tagword`, then pairs each chosen tag with its input token.
 
-        :param tokens: list of words
-        :type tokens: [string,]
-
-        :return: [(word, tag),]
-
-        Calls recursive function '_tagword'
-        to produce a list of tags
-
-        Associates the sequence of returned tags
-        with the correct words in the input sequence
-
-        returns a list of (word, tag) tuples
+        :param tokens: words to tag
+        :type tokens: list[str]
+        :return: list of `(word, tag)` tuples
         """
-
-        # seed BOS in the same (tag, C) form stored during training
-        current_state = [([("BOS", False), ("BOS", False)], 0.0)]
-
         sent = list(tokens)
-
-        tags = self._tagword(sent, current_state)
-
+        tags = self._tagword(sent)
         res = []
         for i in range(len(sent)):
             # unpack and discard the C flags
             t, C = tags[i + 2]
             res.append((sent[i], t))
-
         return res
 
-    def _tagword(self, sent, current_states):
+    def _tagword(self, sent):
         """
-        :param sent : List of words remaining in the sentence
-        :type sent  : [word,]
-        :param current_states : List of possible tag combinations for
-                                the sentence so far, and the log probability
-                                associated with each tag combination
-        :type current_states  : [([tag, ], logprob), ]
+        Tag a sentence by Viterbi decoding with second-order state
+        merging. The per-word work (scoring, expansion, merging) lives
+        in `_expand_states`. We threshold-prune after each word, then
+        score the EOS transition over the surviving states and walk
+        backpointers to reconstruct the best path.
 
-        Iteratively tags each word in the sentence, maintaining a beam of
-        candidate tag sequences and their log probabilities. After the last
-        word, scores the EOS transition and returns the best path.
-
-        Uses formula specified above to calculate the probability
-        of a particular tag.
+        :param sent: words to tag
+        :type sent: list[str]
+        :return: history list `[BOS, BOS, t_0, ..., t_{T-1}]` of
+                 `(tag, capitalization)` pairs.
         """
+        BOS = ("BOS", False)
+        EOS = ("EOS", False)
 
         # local bindings avoid repeated attribute lookups in the hot loop
         wd = self._wd
@@ -501,48 +506,43 @@ class TnT(TaggerI):
         log2_N = self._log2_N
         cap_on = self._C
 
+        # Viterbi states per level. Each level maps (tag_{i-1}, tag_i)
+        # to (logp, backpointer_tag_{i-2}).
+        states = {(BOS, BOS): (0.0, BOS)}
+        history = [states]
+
         for word in sent:
-            new_states = []
             C = cap_on and word[0].isupper()
 
-            # if word is known, expand each state by each tag seen with it
             if word in wd:
                 self.known += 1
                 wd_word = wd[word]
-
-                # Per-tag constants depend on the candidate tag, not on the history being extended.
+                # Per-tag constants depend only on the candidate tag.
                 tag_info = []
                 for t, wc in wd_word.items():
                     tC = (t, C)
                     uni_tC = uni[tC]
                     p_uni = (uni_tC / uni_N) if uni_N else 0
                     tag_info.append((tC, p_uni, log2(wc / uni_tC)))
-
-                new_states = self._expand_beam(current_states, tag_info)
-
             else:
                 self.unknown += 1
-
                 if self._unk is not None:
                     # External unk tagger overrides the suffix model.
                     [(_w, t)] = self._unk.tag([word])
-                    tag = (t, C)
-                    for history, _ in current_states:
-                        history.append(tag)
-                    new_states = current_states
+                    tC = (t, C)
+                    p_uni = (uni[tC] / uni_N) if uni_N else 0
+                    tag_info = [(tC, p_uni, 0.0)]
                 else:
-                    # Score this unknown word against every candidate tag
-                    # using the Bayes-inverted suffix posterior, then
-                    # expand the beam the same way the known-word path does.
+                    # Score this unknown word against every candidate
+                    # tag using the Bayes-inverted suffix posterior.
                     tag_scores = self._unknown_tag_scores(word)
                     if not tag_scores:
                         # Fall back to a literal "Unk" tag when there is
-                        # no prior to score against, for example when the
-                        # tagger has not been trained.
-                        tag = ("Unk", C)
-                        for history, _ in current_states:
-                            history.append(tag)
-                        new_states = current_states
+                        # no prior to score against, for example when
+                        # the tagger has not been trained.
+                        tC = ("Unk", C)
+                        p_uni = (uni[tC] / uni_N) if uni_N else 0
+                        tag_info = [(tC, p_uni, 0.0)]
                     else:
                         tag_info = []
                         for t, score in tag_scores.items():
@@ -550,31 +550,56 @@ class TnT(TaggerI):
                             p_uni = (uni[tC] / uni_N) if uni_N else 0
                             log_score = log2(score) if score > 1e-300 else _LOG_FLOOR_2
                             tag_info.append((tC, p_uni, log_score))
-                        new_states = self._expand_beam(current_states, tag_info)
 
-            # Sort by log prob and threshold-prune
-            # drop states worse than the best by more than log2(N).
-            new_states.sort(reverse=True, key=itemgetter(1))
-            cutoff = new_states[0][1] - log2_N
-            current_states = [s for s in new_states if s[1] >= cutoff]
+            new_states = self._expand_states(states, tag_info)
 
-        # Score the EOS transition with the same deleted interpolation used for every tag, then return the best path.
-        eos = ("EOS", False)
-        p_uni_eos = (uni[eos] / uni_N) if uni_N else 0
-        best_h = current_states[0][0]
-        best_logp = float("-inf")
-        for history, logp in current_states:
-            bi_dist = bi[history[-1]]
-            tri_dist = tri[(history[-2], history[-1])]
+            # Threshold prune: drop states worse than the best by more than log2(N).
+            best_logp = max(s[0] for s in new_states.values())
+            cutoff = best_logp - log2_N
+            new_states = {k: v for k, v in new_states.items() if v[0] >= cutoff}
+
+            states = new_states
+            history.append(states)
+
+        # Score the EOS transition with the same deleted interpolation
+        # used for every other tag, then pick the best final state.
+        # `states` is non-empty by construction, so seeding the search
+        # with its first key keeps the type concrete.
+        p_uni_eos = (uni[EOS] / uni_N) if uni_N else 0
+        best_final_key = next(iter(states))
+        best_final_logp = float("-inf")
+        for (t_prev2, t_prev), (curr_logp, _) in states.items():
+            bi_dist = bi[t_prev]
+            tri_dist = tri[(t_prev2, t_prev)]
             bi_N = bi_dist.N()
             tri_N = tri_dist.N()
-            p_bi = (bi_dist[eos] / bi_N) if bi_N else 0
-            p_tri = (tri_dist[eos] / tri_N) if tri_N else 0
+            p_bi = (bi_dist[EOS] / bi_N) if bi_N else 0
+            p_tri = (tri_dist[EOS] / tri_N) if tri_N else 0
             p = l1 * p_uni_eos + l2 * p_bi + l3 * p_tri
-            logp += log2(p) if p > 1e-300 else _LOG_FLOOR_2
-            if logp > best_logp:
-                best_h, best_logp = history, logp
-        return best_h
+            eos_lp = log2(p) if p > 1e-300 else _LOG_FLOOR_2
+            final_logp = curr_logp + eos_lp
+            if final_logp > best_final_logp:
+                best_final_logp = final_logp
+                best_final_key = (t_prev2, t_prev)
+
+        # Reconstruct the best path by walking backpointers, collecting
+        # tags in reverse. At level L the key is (tag_{L-2}, tag_{L-1})
+        # and the stored backpointer is tag_{L-3}, so each iteration
+        # extends one tag toward the start of the sentence.
+        T = len(sent)
+        if T == 0:
+            return [BOS, BOS]
+
+        tags_reversed = [best_final_key[1]]
+        if T >= 2:
+            tags_reversed.append(best_final_key[0])
+        current_key = best_final_key
+        for level in range(T, 2, -1):
+            backpointer = history[level][current_key][1]
+            tags_reversed.append(backpointer)
+            current_key = (backpointer, current_key[0])
+        tags_reversed.reverse()
+        return [BOS, BOS] + tags_reversed
 
 
 ########################################

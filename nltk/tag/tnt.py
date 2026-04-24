@@ -171,13 +171,14 @@ class TnT(TaggerI):
                 if self._C and w[0].isupper():
                     C = True
 
+                tC = (t, C)
                 self._wd[w][t] += 1
-                self._uni[(t, C)] += 1
-                self._bi[history[1]][(t, C)] += 1
-                self._tri[tuple(history)][(t, C)] += 1
+                self._uni[tC] += 1
+                self._bi[history[1]][tC] += 1
+                self._tri[(history[0], history[1])][tC] += 1
 
-                history.append((t, C))
-                history.pop(0)
+                history[0] = history[1]
+                history[1] = tC
 
                 # set local flag C to false for the next word
                 C = False
@@ -242,15 +243,14 @@ class TnT(TaggerI):
         # Build the two suffix tries from infrequent lexicon words only.
         self._suffix = {False: ConditionalFreqDist(), True: ConditionalFreqDist()}
         for word in self._wd.conditions():
-            if self._wd[word].N() > 10:
+            wd_word = self._wd[word]
+            if wd_word.N() > 10:
                 continue
-            cap = word[0].isupper()
-            trie = self._suffix[cap]
-            max_m = min(len(word), 10)
-            for m in range(1, max_m + 1):
-                suffix = word[-m:]
-                for t, count in self._wd[word].items():
-                    trie[suffix][t] += count
+            trie = self._suffix[word[0].isupper()]
+            for m in range(1, min(len(word), 10) + 1):
+                trie_suffix = trie[word[-m:]]
+                for t, count in wd_word.items():
+                    trie_suffix[t] += count
 
     def _compute_lambda(self):
         """
@@ -387,6 +387,7 @@ class TnT(TaggerI):
                 break
 
         # Successive abstraction from the prior up to the longest suffix.
+        # Update P in place since we only touch existing keys.
         P = dict(self._tag_priors)
         denom = 1.0 + theta
         for i in range(1, longest + 1):
@@ -395,10 +396,8 @@ class TnT(TaggerI):
             if suffix_N == 0:
                 continue
             inv_N = 1.0 / suffix_N
-            P = {
-                t: (suffix_dist[t] * inv_N + theta * P[t]) / denom
-                for t in self._tag_priors
-            }
+            for t in self._tag_priors:
+                P[t] = (suffix_dist[t] * inv_N + theta * P[t]) / denom
 
         # Apply Bayesian inversion so the result ranks by P(suffix | t),
         # which is proportional to P(t | suffix) / P(t).
@@ -444,12 +443,15 @@ class TnT(TaggerI):
                     new_states[new_key] = (total_logp, t_prev2)
         return new_states
 
-    def tagdata(self, data):
+    def tagdata(self, data, segment=False):
         """
         Tags each sentence in a list of sentences
 
         :param data:list of list of words
         :type data: [[string,],]
+        :param segment: forwarded to ``tag``; pass True to auto-split
+                        each input on internal [.!?;] punctuation
+        :type segment: bool
         :return: list of list of (word, tag) tuples
 
         Invokes tag(sent) function for each sentence
@@ -458,19 +460,32 @@ class TnT(TaggerI):
         """
         res = []
         for sent in data:
-            res1 = self.tag(sent)
+            res1 = self.tag(sent, segment=segment)
             res.append(res1)
         return res
 
-    def tag(self, tokens):
+    def tag(self, tokens, segment=False):
         """
         Tag a single sentence. Delegates the actual decode to
         `_tagword`, then pairs each chosen tag with its input token.
 
+        When `segment` is True, the input may contain mid-sequence
+        sentence punctuation [.!?;]. The decoder splits on those
+        tokens and re-seeds the BOS state for each segment.
+        The default is False because most NLTK callers pre-segment,
+        and auto-splitting on `.` would mis-handle abbreviations
+        like "Mr." in unsegmented input.
+
         :param tokens: words to tag
         :type tokens: list[str]
+        :param segment: split on [.!?;] and decode each segment with a
+                        fresh BOS state
+        :type segment: bool
         :return: list of `(word, tag)` tuples
         """
+        if segment:
+            return self._tag_segmented(tokens)
+
         sent = list(tokens)
         tags = self._tagword(sent)
         res = []
@@ -478,6 +493,25 @@ class TnT(TaggerI):
             # unpack and discard the C flags
             t, C = tags[i + 2]
             res.append((sent[i], t))
+        return res
+
+    def _tag_segmented(self, tokens):
+        """
+        Split `tokens` on [.!?;] and tag each segment as its own
+        sentence. Each sentence-final punctuation token stays inside
+        the segment that ends with it. A trailing segment without a
+        final punctuation is tagged on its own.
+        """
+        sent_marks = (".", "!", "?", ";")
+        res = []
+        segment = []
+        for tok in tokens:
+            segment.append(tok)
+            if tok in sent_marks:
+                res.extend(self.tag(segment))
+                segment = []
+        if segment:
+            res.extend(self.tag(segment))
         return res
 
     def _tagword(self, sent):
@@ -626,7 +660,7 @@ def basic_sent_chop(data, raw=True):
     This function can separate both tagged and raw sequences into
     basic sentences.
 
-    Sentence markers are the set of [,.!?]
+    Sentence markers are the set of [.!?;]
 
     This is a simple method which enhances the performance of the TnT
     tagger. Better sentence tokenization will further enhance the results.

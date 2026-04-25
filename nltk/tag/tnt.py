@@ -387,15 +387,17 @@ class TnT(TaggerI):
                 break
 
         # Successive abstraction from the prior up to the longest suffix.
-        # Update in place since we only touch existing keys.
+        # Update in place since we only touch existing keys. Skip suffix
+        # lengths whose tail is not in the trie rather than indexing in
+        # (which would insert an empty defaultdict entry on every miss).
         p_t_given_suffix = dict(tag_priors)
         denom = 1.0 + theta
         for i in range(1, longest + 1):
-            suffix_dist = suffix_trie[word[-i:]]
-            suffix_N = suffix_dist.N()
-            if suffix_N == 0:
+            suffix_key = word[-i:]
+            if suffix_key not in suffix_trie:
                 continue
-            inv_suffix_N = 1.0 / suffix_N
+            suffix_dist = suffix_trie[suffix_key]
+            inv_suffix_N = 1.0 / suffix_dist.N()
             for tag in tag_priors:
                 p_t_given_suffix[tag] = (
                     suffix_dist[tag] * inv_suffix_N + theta * p_t_given_suffix[tag]
@@ -675,11 +677,10 @@ class TnT(TaggerI):
                 best_final_logp = final_logp
                 best_final_state = (state_i_minus_2, state_i_minus_1)
 
-        # Reconstruct the best path by walking backpointers, collecting
-        # states in reverse. At level L the key is
-        # (state_{L-2}, state_{L-1}) and the stored backpointer is
-        # state_{L-3}, so each iteration extends one state toward the
-        # start of the sentence.
+        # Walk backpointers to reconstruct the best path,
+        # collecting states in reverse. At level L the key
+        # is (state_{L-2}, state_{L-1}) and the backpointer
+        # is state_{L-3}, peeling off one state per step.
         T = len(sent)
         if T == 0:
             return [_BOS, _BOS]

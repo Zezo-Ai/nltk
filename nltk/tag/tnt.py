@@ -178,7 +178,7 @@ class TnT(TaggerI):
             state_i_minus_2 = _BOS
             state_i_minus_1 = _BOS
             for w, t in sent:
-                c_i = cap_on and w[0].isupper()
+                c_i = cap_on and bool(w) and w[0].isupper()
                 state_i = (t, c_i)
                 wd[w][t] += 1
                 uni[state_i] += 1
@@ -246,7 +246,7 @@ class TnT(TaggerI):
         }
         for word in self._word_tag_freqs.conditions():
             word_tag_freqs = self._word_tag_freqs[word]
-            if word_tag_freqs.N() > 10:
+            if word_tag_freqs.N() > 10 or not word:
                 continue
             trie = self._suffix_trie_by_cap[word[0].isupper()]
             for m in range(1, min(len(word), 10) + 1):
@@ -310,10 +310,14 @@ class TnT(TaggerI):
                 if w3:
                     lambda3_mass += share
 
+        # If no trigrams contributed (empty or pathological training input),
+        # leave the weights at their __init__ zero defaults rather than
+        # dividing by zero. Decode will fall back to the unigram emission.
         total_mass = lambda1_mass + lambda2_mass + lambda3_mass
-        self._lambda1 = lambda1_mass / total_mass
-        self._lambda2 = lambda2_mass / total_mass
-        self._lambda3 = lambda3_mass / total_mass
+        if total_mass > 0:
+            self._lambda1 = lambda1_mass / total_mass
+            self._lambda2 = lambda2_mass / total_mass
+            self._lambda3 = lambda3_mass / total_mass
 
     def _unknown_tag_scores(self, word):
         """
@@ -343,7 +347,7 @@ class TnT(TaggerI):
         if not tag_priors:
             return {}
 
-        is_capitalized = word[0].isupper()
+        is_capitalized = bool(word) and word[0].isupper()
         trie = self._suffix_trie_by_cap[is_capitalized]
         theta = self._theta
 
@@ -533,7 +537,7 @@ class TnT(TaggerI):
         state_history = [states]
 
         for word in sent:
-            c_i = cap_on and word[0].isupper()
+            c_i = cap_on and bool(word) and word[0].isupper()
             wd_word = word_tag_freqs.get(word)
             if wd_word is not None:
                 self.known += 1

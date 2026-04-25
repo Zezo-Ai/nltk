@@ -142,6 +142,11 @@ class TnT(TaggerI):
 
         self._unk = unk
 
+        # Memoizes per-word `tag_info` for the decode hot path. Cleared
+        # at the start of `train()` because the model state it derives
+        # from changes there. Keyed by `(word, capitalization_flag)`.
+        self._tag_info_cache = {}
+
         # statistical tools (ignore or delete me)
         self.unknown = 0
         self.known = 0
@@ -156,40 +161,39 @@ class TnT(TaggerI):
         :type data: tuple(str)
         """
 
-        # Ensure that local C flag is initialized before use
-        C = False
+        # The decode cache is keyed off post-train state, so a fresh
+        # train() invalidates every entry.
+        self._tag_info_cache.clear()
 
         if self._unk is not None and not self._T:
             self._unk.train(data)
 
+        # local bindings save repeated attribute lookups across the corpus
+        wd = self._wd
+        uni = self._uni
+        bi = self._bi
+        tri = self._tri
+        cap_on = self._C
+
         for sent in data:
             history = [("BOS", False), ("BOS", False)]
             for w, t in sent:
-                # if capitalization is requested,
-                # and the word begins with a capital
-                # set local flag C to True
-                if self._C and w[0].isupper():
-                    C = True
-
+                C = cap_on and w[0].isupper()
                 tC = (t, C)
-                self._wd[w][t] += 1
-                self._uni[tC] += 1
-                self._bi[history[1]][tC] += 1
-                self._tri[(history[0], history[1])][tC] += 1
+                wd[w][t] += 1
+                uni[tC] += 1
+                bi[history[1]][tC] += 1
+                tri[(history[0], history[1])][tC] += 1
 
-                history[0] = history[1]
-                history[1] = tC
-
-                # set local flag C to false for the next word
-                C = False
+                history[0], history[1] = history[1], tC
 
             # Record EOS as a pseudo-tag in the n-gram counts. Empty sentences are skipped
             # because their history[-1] is still BOS and would absorb the count.
             if sent:
                 eos = ("EOS", False)
-                self._uni[eos] += 1
-                self._bi[history[-1]][eos] += 1
-                self._tri[tuple(history)][eos] += 1
+                uni[eos] += 1
+                bi[history[-1]][eos] += 1
+                tri[tuple(history)][eos] += 1
 
         # compute lambda values from the trained frequency distributions
         self._compute_lambda()
@@ -254,22 +258,18 @@ class TnT(TaggerI):
 
     def _compute_lambda(self):
         """
-        creates lambda values based upon training data
+        Compute the linear interpolation weights l1, l2, l3 via deleted interpolation.
 
-        NOTE: no need to explicitly reference C,
-        it is contained within the tag variable :: tag == (tag,C)
+        For each tag trigram (t1, t2, t3) with positive count, compute
+        three deleted estimates
 
-        for each tag trigram (t1, t2, t3)
-        depending on the maximum value of
-        - f(t1,t2,t3)-1 / f(t1,t2)-1
-        - f(t2,t3)-1 / f(t2)-1
-        - f(t3)-1 / N-1
+            c1 = (f(t3) - 1) / (N - 1)
+            c2 = (f(t2, t3) - 1) / (f(t2) - 1)
+            c3 = (f(t1, t2, t3) - 1) / (f(t1, t2) - 1)
 
-        increment l3,l2, or l1 by f(t1,t2,t3)
-
-        ISSUES -- Resolutions:
-        if 2 values are equal, increment both lambda values
-        by (f(t1,t2,t3) / 2)
+        and add the trigram's count to the lambda corresponding to the
+        largest c. When two or three c values tie at the maximum, the
+        count is split equally among the tied lambdas.
         """
 
         # temporary lambda variables
@@ -277,75 +277,46 @@ class TnT(TaggerI):
         tl2 = 0.0
         tl3 = 0.0
 
+        bi = self._bi
+        uni = self._uni
+        uni_n_minus_1 = uni.N() - 1
+
         # for each t1,t2 in system
         for history in self._tri.conditions():
-            h1, h2 = history
+            _, h2 = history
+            tri_dist = self._tri[history]
+            tri_n_minus_1 = tri_dist.N() - 1
+            bi_dist = bi[h2]
+            bi_n_minus_1 = bi_dist.N() - 1
 
             # for each t3 given t1,t2 in system
-            # (NOTE: tag actually represents (tag,C))
-            # However no effect within this function
-            for tag in self._tri[history].keys():
-                # safe_div provides a safe floating point division
-                # it returns 0 if the denominator is 0
-                c3 = self._safe_div(
-                    (self._tri[history][tag] - 1), (self._tri[history].N() - 1)
-                )
-                c2 = self._safe_div((self._bi[h2][tag] - 1), (self._bi[h2].N() - 1))
-                c1 = self._safe_div((self._uni[tag] - 1), (self._uni.N() - 1))
+            for tC, count in tri_dist.items():
+                # Deleted estimates per Brants Figure 1. Each branch falls
+                # back to 0 when its denominator is zero, which mirrors
+                # the original `_safe_div` semantics.
+                c3 = (count - 1) / tri_n_minus_1 if tri_n_minus_1 else 0
+                c2 = (bi_dist[tC] - 1) / bi_n_minus_1 if bi_n_minus_1 else 0
+                c1 = (uni[tC] - 1) / uni_n_minus_1 if uni_n_minus_1 else 0
 
-                # if c1 is the maximum value:
-                if (c1 > c3) and (c1 > c2):
-                    tl1 += self._tri[history][tag]
-
-                # if c2 is the maximum value
-                elif (c2 > c3) and (c2 > c1):
-                    tl2 += self._tri[history][tag]
-
-                # if c3 is the maximum value
-                elif (c3 > c2) and (c3 > c1):
-                    tl3 += self._tri[history][tag]
-
-                # if c3, and c2 are equal and larger than c1
-                elif (c3 == c2) and (c3 > c1):
-                    tl2 += self._tri[history][tag] / 2.0
-                    tl3 += self._tri[history][tag] / 2.0
-
-                # if c1, and c2 are equal and larger than c3
-                elif (c2 == c1) and (c1 > c3):
-                    tl1 += self._tri[history][tag] / 2.0
-                    tl2 += self._tri[history][tag] / 2.0
-
-                # if c1, and c3 are equal and larger than c2
-                elif (c1 == c3) and (c1 > c2):
-                    tl1 += self._tri[history][tag] / 2.0
-                    tl3 += self._tri[history][tag] / 2.0
-
-                # if all three are equal
-                elif (c1 == c2) and (c2 == c3):
-                    tl1 += self._tri[history][tag] / 3.0
-                    tl2 += self._tri[history][tag] / 3.0
-                    tl3 += self._tri[history][tag] / 3.0
-
-                # otherwise there might be a problem
-                # eg: all values = 0
-                else:
-                    pass
+                # Split the trigram's count equally among the lambdas
+                # whose c value ties for the maximum.
+                maxc = max(c1, c2, c3)
+                w1 = c1 == maxc
+                w2 = c2 == maxc
+                w3 = c3 == maxc
+                share = count / (w1 + w2 + w3)
+                if w1:
+                    tl1 += share
+                if w2:
+                    tl2 += share
+                if w3:
+                    tl3 += share
 
         # Lambda normalisation:
         # ensures that l1+l2+l3 = 1
         self._l1 = tl1 / (tl1 + tl2 + tl3)
         self._l2 = tl2 / (tl1 + tl2 + tl3)
         self._l3 = tl3 / (tl1 + tl2 + tl3)
-
-    def _safe_div(self, v1, v2):
-        """
-        Safe floating point division function, does not allow division by 0
-        returns 0 if the denominator is 0
-        """
-        if v2 == 0:
-            return 0
-        else:
-            return v1 / v2
 
     def _unknown_tag_scores(self, word):
         """
@@ -488,12 +459,8 @@ class TnT(TaggerI):
 
         sent = list(tokens)
         tags = self._tagword(sent)
-        res = []
-        for i in range(len(sent)):
-            # unpack and discard the C flags
-            t, C = tags[i + 2]
-            res.append((sent[i], t))
-        return res
+        # Strip the [BOS, BOS] prefix and discard the per-tag capitalization flag.
+        return [(w, tag) for w, (tag, _) in zip(sent, tags[2:])]
 
     def _tag_segmented(self, tokens):
         """
@@ -539,6 +506,7 @@ class TnT(TaggerI):
         l1, l2, l3 = self._l1, self._l2, self._l3
         log2_N = self._log2_N
         cap_on = self._C
+        cache = self._tag_info_cache
 
         # Viterbi states per level. Each level maps (tag_{i-1}, tag_i)
         # to (logp, backpointer_tag_{i-2}).
@@ -547,43 +515,54 @@ class TnT(TaggerI):
 
         for word in sent:
             C = cap_on and word[0].isupper()
-
-            if word in wd:
+            wd_word = wd.get(word)
+            if wd_word is not None:
                 self.known += 1
-                wd_word = wd[word]
-                # Per-tag constants depend only on the candidate tag.
-                tag_info = []
-                for t, wc in wd_word.items():
-                    tC = (t, C)
-                    uni_tC = uni[tC]
-                    p_uni = (uni_tC / uni_N) if uni_N else 0
-                    tag_info.append((tC, p_uni, log2(wc / uni_tC)))
             else:
                 self.unknown += 1
-                if self._unk is not None:
-                    # External unk tagger overrides the suffix model.
-                    [(_w, t)] = self._unk.tag([word])
-                    tC = (t, C)
-                    p_uni = (uni[tC] / uni_N) if uni_N else 0
-                    tag_info = [(tC, p_uni, 0.0)]
-                else:
-                    # Score this unknown word against every candidate
-                    # tag using the Bayes-inverted suffix posterior.
-                    tag_scores = self._unknown_tag_scores(word)
-                    if not tag_scores:
-                        # Fall back to a literal "Unk" tag when there is
-                        # no prior to score against, for example when
-                        # the tagger has not been trained.
-                        tC = ("Unk", C)
-                        p_uni = (uni[tC] / uni_N) if uni_N else 0
-                        tag_info = [(tC, p_uni, 0.0)]
-                    else:
+
+            # External unk taggers may be stateful or context dependent,
+            # so we evaluate them on every call rather than memoizing.
+            # The known and suffix model paths are pure functions of
+            # `(word, C)` and the trained model state, so they cache.
+            if wd_word is None and self._unk is not None:
+                [(_w, t)] = self._unk.tag([word])
+                tC = (t, C)
+                p_uni = (uni[tC] / uni_N) if uni_N else 0
+                tag_info = [(tC, p_uni, 0.0)]
+            else:
+                key = (word, C)
+                tag_info = cache.get(key)
+                if tag_info is None:
+                    if wd_word is not None:
+                        # Per-tag constants depend only on the candidate tag.
                         tag_info = []
-                        for t, score in tag_scores.items():
+                        for t, wc in wd_word.items():
                             tC = (t, C)
+                            uni_tC = uni[tC]
+                            p_uni = (uni_tC / uni_N) if uni_N else 0
+                            tag_info.append((tC, p_uni, log2(wc / uni_tC)))
+                    else:
+                        # Score this unknown word against every candidate
+                        # tag using the Bayes-inverted suffix posterior.
+                        tag_scores = self._unknown_tag_scores(word)
+                        if not tag_scores:
+                            # Fall back to a literal "Unk" tag when there is
+                            # no prior to score against, for example when
+                            # the tagger has not been trained.
+                            tC = ("Unk", C)
                             p_uni = (uni[tC] / uni_N) if uni_N else 0
-                            log_score = log2(score) if score > 1e-300 else _LOG_FLOOR_2
-                            tag_info.append((tC, p_uni, log_score))
+                            tag_info = [(tC, p_uni, 0.0)]
+                        else:
+                            tag_info = []
+                            for t, score in tag_scores.items():
+                                tC = (t, C)
+                                p_uni = (uni[tC] / uni_N) if uni_N else 0
+                                log_score = (
+                                    log2(score) if score > 1e-300 else _LOG_FLOOR_2
+                                )
+                                tag_info.append((tC, p_uni, log_score))
+                    cache[key] = tag_info
 
             new_states = self._expand_states(states, tag_info)
 
@@ -672,21 +651,20 @@ def basic_sent_chop(data, raw=True):
 
     if raw:
         for word in data:
+            curr_sent.append(word)
             if word in sent_mark:
-                curr_sent.append(word)
                 new_data.append(curr_sent)
                 curr_sent = []
-            else:
-                curr_sent.append(word)
-
     else:
         for word, tag in data:
+            curr_sent.append((word, tag))
             if word in sent_mark:
-                curr_sent.append((word, tag))
                 new_data.append(curr_sent)
                 curr_sent = []
-            else:
-                curr_sent.append((word, tag))
+
+    if curr_sent:
+        new_data.append(curr_sent)
+
     return new_data
 
 
@@ -792,11 +770,9 @@ def demo3():
         s.known = 0
 
         tknacc += tacc / tp_kn
-        sknacc += sacc / tp_kn
+        sknacc += sacc / sp_kn
         tallacc += tacc
         sallacc += sacc
-
-        # print(i+1, (tacc / tp_kn), i+1, (sacc / tp_kn), i+1, tacc, i+1, sacc)
 
     print("brown: acc over words known:", 10 * tknacc)
     print("     : overall accuracy:", 10 * tallacc)

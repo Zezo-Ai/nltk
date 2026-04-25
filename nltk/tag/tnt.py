@@ -7,7 +7,7 @@
 # For license information, see LICENSE.TXT
 
 """
-Implementation of 'TnT - A Statisical Part of Speech Tagger'
+Implementation of 'TnT - A Statistical Part of Speech Tagger'
 by Thorsten Brants
 
 https://aclanthology.org/A00-1031.pdf
@@ -20,6 +20,12 @@ from nltk.tag.api import TaggerI
 
 # Returned in place of log2(p) when p is zero; log2(1e-300) ~= -996.58.
 _LOG_FLOOR_2 = log2(1e-300)
+
+# Sentinel tags used at sentence boundaries.
+_BOS = ("BOS", False)
+_EOS = ("EOS", False)
+
+_SENT_MARKS = (".", "!", "?", ";")
 
 
 class TnT(TaggerI):
@@ -89,124 +95,113 @@ class TnT(TaggerI):
 
     def __init__(self, unk=None, Trained=False, N=1000, C=False):
         """
-        Construct a TnT statistical tagger. Tagger must be trained
-        before being used to tag input.
+        Construct a TnT statistical tagger. The tagger must be trained
+        before it can be used to tag input.
 
-        :param unk: instance of a POS tagger, conforms to TaggerI
+        :param unk: instance of a POS tagger, conforms to TaggerI.
+                    When supplied, overrides the built-in suffix model
+                    on the unknown-word path.
         :type  unk: TaggerI
-        :param Trained: Indication that the POS tagger is trained or not
+        :param Trained: Indication that the POS tagger is trained or not.
+                        Set True to skip training the optional ``unk``
+                        tagger on the next train() call.
         :type  Trained: bool
-        :param N: Beam search pruning threshold
+        :param N: Beam search pruning threshold. After each Viterbi
+                  step any state whose log-probability is worse than
+                  the best by more than a factor of N is discarded.
+                  1000 is a good default.
         :type  N: int
-        :param C: Capitalization flag
+        :param C: Capitalization flag. When True, tags are differentiated
+                  by whether the source word is capitalized. This rarely
+                  improves accuracy in practice.
         :type  C: bool
-
-        Initializer, creates frequency distributions to be used
-        for tagging
-
-        _lx values represent the portion of the tri/bi/uni taggers
-        to be used to calculate the probability
-
-        N is the beam search pruning threshold: after scoring, any state
-        whose probability is worse than the best by more than a factor of
-        N is discarded. A good value for this is 1000.
-
-        C is a boolean value which specifies to use or
-        not use the Capitalization of the word as additional
-        information for tagging.
-        NOTE: using capitalization may not increase the accuracy
-        of the tagger
         """
 
-        self._uni = FreqDist()
-        self._bi = ConditionalFreqDist()
-        self._tri = ConditionalFreqDist()
-        self._wd = ConditionalFreqDist()
-        self._l1 = 0.0
-        self._l2 = 0.0
-        self._l3 = 0.0
-        self._N = N
-        self._C = C
-        self._T = Trained
+        self._tag_unigrams = FreqDist()
+        self._tag_bigrams = ConditionalFreqDist()
+        self._tag_trigrams = ConditionalFreqDist()
+        self._word_tag_freqs = ConditionalFreqDist()
+        self._lambda1 = 0.0
+        self._lambda2 = 0.0
+        self._lambda3 = 0.0
+        self._beam_threshold = N
+        self._use_capitalization = C
+        self._unk_trained = Trained
 
-        # cached after train() for the decode hot path
-        self._uni_N = 0
-        self._log2_N = 0.0
+        self._num_tag_tokens = 0
+        self._log2_beam_threshold = 0.0
 
         # Suffix model state for unknown words. Two tries split by word
         # capitalization, plus the smoothing weight and tag priors used
         # by the recursion at decode time.
-        self._suffix = {False: ConditionalFreqDist(), True: ConditionalFreqDist()}
-        self._tag_priors = {}
-        self._suffix_theta = 0.0
+        self._suffix_trie_by_cap = {
+            False: ConditionalFreqDist(),
+            True: ConditionalFreqDist(),
+        }
+        self._tag_prior_probs = {}
+        self._theta = 0.0
 
         self._unk = unk
 
-        # Memoizes per-word `tag_info` for the decode hot path. Cleared
-        # at the start of `train()` because the model state it derives
-        # from changes there. Keyed by `(word, capitalization_flag)`.
-        self._tag_info_cache = {}
+        # Cleared on train because model state changes.
+        self._candidate_tags_cache = {}
 
-        # statistical tools (ignore or delete me)
         self.unknown = 0
         self.known = 0
 
     def train(self, data):
         """
-        Uses a set of tagged data to train the tagger.
-        If an unknown word tagger is specified,
-        it is trained on the same data.
+        Trains the tagger on a list of tagged sentences. If an external
+        unknown-word tagger was passed via ``unk``, it is trained on the
+        same data on the first call only. Resets the decode cache and
+        populates the n-gram counts, the suffix model, and the
+        deleted-interpolation weights.
 
-        :param data: List of lists of (word, tag) tuples
-        :type data: tuple(str)
+        :param data: list of lists of (word, tag) tuples
+        :type  data: list[list[tuple[str, str]]]
         """
 
         # The decode cache is keyed off post-train state, so a fresh
         # train() invalidates every entry.
-        self._tag_info_cache.clear()
+        self._candidate_tags_cache.clear()
 
-        if self._unk is not None and not self._T:
+        if self._unk is not None and not self._unk_trained:
             self._unk.train(data)
 
-        # local bindings save repeated attribute lookups across the corpus
-        wd = self._wd
-        uni = self._uni
-        bi = self._bi
-        tri = self._tri
-        cap_on = self._C
+        wd = self._word_tag_freqs
+        uni = self._tag_unigrams
+        bi = self._tag_bigrams
+        tri = self._tag_trigrams
+        cap_on = self._use_capitalization
 
         for sent in data:
-            history = [("BOS", False), ("BOS", False)]
+            state_i_minus_2 = _BOS
+            state_i_minus_1 = _BOS
             for w, t in sent:
-                C = cap_on and w[0].isupper()
-                tC = (t, C)
+                c_i = cap_on and w[0].isupper()
+                state_i = (t, c_i)
                 wd[w][t] += 1
-                uni[tC] += 1
-                bi[history[1]][tC] += 1
-                tri[(history[0], history[1])][tC] += 1
+                uni[state_i] += 1
+                bi[state_i_minus_1][state_i] += 1
+                tri[(state_i_minus_2, state_i_minus_1)][state_i] += 1
+                state_i_minus_2, state_i_minus_1 = state_i_minus_1, state_i
 
-                history[0], history[1] = history[1], tC
-
-            # Record EOS as a pseudo-tag in the n-gram counts. Empty sentences are skipped
-            # because their history[-1] is still BOS and would absorb the count.
+            # Record EOS as a pseudo-tag in the n-gram counts. Skip empty
+            # sentences so we don't add an EOS count to the BOS state.
             if sent:
-                eos = ("EOS", False)
-                uni[eos] += 1
-                bi[history[-1]][eos] += 1
-                tri[tuple(history)][eos] += 1
+                uni[_EOS] += 1
+                bi[state_i_minus_1][_EOS] += 1
+                tri[(state_i_minus_2, state_i_minus_1)][_EOS] += 1
 
-        # compute lambda values from the trained frequency distributions
         self._compute_lambda()
 
-        # cache constants used in the decode hot path
-        self._uni_N = self._uni.N()
-        self._log2_N = log2(self._N)
+        self._num_tag_tokens = self._tag_unigrams.N()
+        self._log2_beam_threshold = log2(self._beam_threshold)
 
-        # Populate the suffix model used by the unknown-word path.
         self._build_suffix_model()
 
         # Prevents repeat train() calls from retraining the optional unk tagger.
-        self._T = True
+        self._unk_trained = True
 
     def _build_suffix_model(self):
         """
@@ -224,79 +219,82 @@ class TnT(TaggerI):
         """
         # Tag priors over raw tags (excluding EOS), P(t) = f(t) / sum_t' f(t')
         tag_counts = {}
-        for (t, _C), count in self._uni.items():
+        for (t, _), count in self._tag_unigrams.items():
             if t == "EOS":
                 continue
             tag_counts[t] = tag_counts.get(t, 0) + count
         total = sum(tag_counts.values())
         if total > 0:
-            self._tag_priors = {t: c / total for t, c in tag_counts.items()}
+            self._tag_prior_probs = {t: c / total for t, c in tag_counts.items()}
         else:
-            self._tag_priors = {}
+            self._tag_prior_probs = {}
 
         # theta is the standard deviation of the unconditioned tag priors.
         # This is the sample standard deviation per the paper's formula.
-        priors = list(self._tag_priors.values())
+        priors = list(self._tag_prior_probs.values())
         n = len(priors)
         if n > 1:
             mean = sum(priors) / n
-            self._suffix_theta = (sum((p - mean) ** 2 for p in priors) / (n - 1)) ** 0.5
+            self._theta = (sum((p - mean) ** 2 for p in priors) / (n - 1)) ** 0.5
         else:
-            self._suffix_theta = 0.0
+            self._theta = 0.0
 
         # Build the two suffix tries from infrequent lexicon words only.
-        self._suffix = {False: ConditionalFreqDist(), True: ConditionalFreqDist()}
-        for word in self._wd.conditions():
-            wd_word = self._wd[word]
-            if wd_word.N() > 10:
+        self._suffix_trie_by_cap = {
+            False: ConditionalFreqDist(),
+            True: ConditionalFreqDist(),
+        }
+        for word in self._word_tag_freqs.conditions():
+            word_tag_freqs = self._word_tag_freqs[word]
+            if word_tag_freqs.N() > 10:
                 continue
-            trie = self._suffix[word[0].isupper()]
+            trie = self._suffix_trie_by_cap[word[0].isupper()]
             for m in range(1, min(len(word), 10) + 1):
                 trie_suffix = trie[word[-m:]]
-                for t, count in wd_word.items():
+                for t, count in word_tag_freqs.items():
                     trie_suffix[t] += count
 
     def _compute_lambda(self):
         """
-        Compute the linear interpolation weights l1, l2, l3 via deleted interpolation.
+        Computes the deleted-interpolation weights l1, l2, l3 from the
+        observed tag n-grams. Tied maxima split the trigram count evenly
+        among the winning lambdas. Branches with a zero denominator
+        contribute zero.
 
-        For each tag trigram (t1, t2, t3) with positive count, compute
-        three deleted estimates
+        For each trigram (t1, t2, t3) with positive count we compare
 
             c1 = (f(t3) - 1) / (N - 1)
             c2 = (f(t2, t3) - 1) / (f(t2) - 1)
             c3 = (f(t1, t2, t3) - 1) / (f(t1, t2) - 1)
-
-        and add the trigram's count to the lambda corresponding to the
-        largest c. When two or three c values tie at the maximum, the
-        count is split equally among the tied lambdas.
         """
 
-        # temporary lambda variables
-        tl1 = 0.0
-        tl2 = 0.0
-        tl3 = 0.0
+        lambda1_mass = 0.0
+        lambda2_mass = 0.0
+        lambda3_mass = 0.0
 
-        bi = self._bi
-        uni = self._uni
-        uni_n_minus_1 = uni.N() - 1
+        tag_bigrams = self._tag_bigrams
+        tag_unigrams = self._tag_unigrams
+        unigram_n_minus_1 = tag_unigrams.N() - 1
 
-        # for each t1,t2 in system
-        for history in self._tri.conditions():
+        for history in self._tag_trigrams.conditions():
             _, h2 = history
-            tri_dist = self._tri[history]
-            tri_n_minus_1 = tri_dist.N() - 1
-            bi_dist = bi[h2]
-            bi_n_minus_1 = bi_dist.N() - 1
+            trigram_dist = self._tag_trigrams[history]
+            trigram_n_minus_1 = trigram_dist.N() - 1
+            bigram_dist = tag_bigrams[h2]
+            bigram_n_minus_1 = bigram_dist.N() - 1
 
-            # for each t3 given t1,t2 in system
-            for tC, count in tri_dist.items():
-                # Deleted estimates per Brants Figure 1. Each branch falls
-                # back to 0 when its denominator is zero, which mirrors
-                # the original `_safe_div` semantics.
-                c3 = (count - 1) / tri_n_minus_1 if tri_n_minus_1 else 0
-                c2 = (bi_dist[tC] - 1) / bi_n_minus_1 if bi_n_minus_1 else 0
-                c1 = (uni[tC] - 1) / uni_n_minus_1 if uni_n_minus_1 else 0
+            for state_i, count in trigram_dist.items():
+                c3 = (count - 1) / trigram_n_minus_1 if trigram_n_minus_1 else 0
+                c2 = (
+                    (bigram_dist[state_i] - 1) / bigram_n_minus_1
+                    if bigram_n_minus_1
+                    else 0
+                )
+                c1 = (
+                    (tag_unigrams[state_i] - 1) / unigram_n_minus_1
+                    if unigram_n_minus_1
+                    else 0
+                )
 
                 # Split the trigram's count equally among the lambdas
                 # whose c value ties for the maximum.
@@ -306,17 +304,16 @@ class TnT(TaggerI):
                 w3 = c3 == maxc
                 share = count / (w1 + w2 + w3)
                 if w1:
-                    tl1 += share
+                    lambda1_mass += share
                 if w2:
-                    tl2 += share
+                    lambda2_mass += share
                 if w3:
-                    tl3 += share
+                    lambda3_mass += share
 
-        # Lambda normalisation:
-        # ensures that l1+l2+l3 = 1
-        self._l1 = tl1 / (tl1 + tl2 + tl3)
-        self._l2 = tl2 / (tl1 + tl2 + tl3)
-        self._l3 = tl3 / (tl1 + tl2 + tl3)
+        total_mass = lambda1_mass + lambda2_mass + lambda3_mass
+        self._lambda1 = lambda1_mass / total_mass
+        self._lambda2 = lambda2_mass / total_mass
+        self._lambda3 = lambda3_mass / total_mass
 
     def _unknown_tag_scores(self, word):
         """
@@ -342,12 +339,13 @@ class TnT(TaggerI):
                  preserves the argmax without computing it. Tags with
                  zero prior are omitted.
         """
-        if not self._tag_priors:
+        tag_priors = self._tag_prior_probs
+        if not tag_priors:
             return {}
 
-        cap = word[0].isupper()
-        trie = self._suffix[cap]
-        theta = self._suffix_theta
+        is_capitalized = word[0].isupper()
+        trie = self._suffix_trie_by_cap[is_capitalized]
+        theta = self._theta
 
         # Find the longest known suffix by scanning from 10 down to 1.
         # If none is found, the loop below leaves P at the unigram prior.
@@ -358,8 +356,8 @@ class TnT(TaggerI):
                 break
 
         # Successive abstraction from the prior up to the longest suffix.
-        # Update P in place since we only touch existing keys.
-        P = dict(self._tag_priors)
+        # Update in place since we only touch existing keys.
+        p_t_given_suffix = dict(tag_priors)
         denom = 1.0 + theta
         for i in range(1, longest + 1):
             suffix_dist = trie[word[-i:]]
@@ -367,67 +365,85 @@ class TnT(TaggerI):
             if suffix_N == 0:
                 continue
             inv_N = 1.0 / suffix_N
-            for t in self._tag_priors:
-                P[t] = (suffix_dist[t] * inv_N + theta * P[t]) / denom
+            for t in tag_priors:
+                p_t_given_suffix[t] = (
+                    suffix_dist[t] * inv_N + theta * p_t_given_suffix[t]
+                ) / denom
 
         # Apply Bayesian inversion so the result ranks by P(suffix | t),
         # which is proportional to P(t | suffix) / P(t).
-        return {t: P[t] / prior for t, prior in self._tag_priors.items() if prior > 0}
+        return {
+            t: p_t_given_suffix[t] / prior
+            for t, prior in tag_priors.items()
+            if prior > 0
+        }
 
-    def _expand_states(self, states, tag_info):
+    def _expand_states(self, states, candidate_tags):
         """
-        Take one Viterbi step. For every predecessor state we score
-        each candidate `t_curr` from `tag_info` and accumulate the
-        results into a new state dict keyed by `(t_prev, t_curr)`.
-        When two predecessors land on the same key we keep the
-        higher-scoring one and discard the other. The second-order
-        Markov assumption means everything after this point depends
-        only on the last two tags, so the discarded path can never
-        beat the kept one.
+        Takes one Viterbi step. For every predecessor state we score
+        each candidate `state_i` from `candidate_tags` and accumulate
+        the results into a new state dict keyed by
+        `(state_i_minus_1, state_i)`. When two predecessors land on
+        the same key we keep the higher-scoring one and discard the
+        other. The second-order Markov assumption means everything
+        after this point depends only on the last two states, so the
+        discarded path can never beat the kept one.
 
-        `tag_info` is a list of `(tC, p_uni, log_emit)` triples for
-        the candidate `t_curr` values. Transitions use the same
-        deleted interpolation as on the known-word path, floored
-        before log2 to avoid blowing up on an all-zero context.
+        `candidate_tags` is a sequence of `(state_i, p_state_i,
+        log_emit)` triples. Transitions use the same deleted
+        interpolation as on the known-word path, floored before log2
+        to avoid blowing up on an all-zero context.
 
-        :return: dict mapping `(t_prev, t_curr)` to `(logp, t_prev2)`.
-                 `t_prev2` is the backpointer used to reconstruct the
-                 best path after the final EOS step.
+        :return: ``(new_states, best_logp)``. ``new_states`` maps
+                 `(state_i_minus_1, state_i)` to
+                 `(logp, state_i_minus_2)`, where `state_i_minus_2` is
+                 the backpointer used to reconstruct the best path
+                 after the final EOS step. `best_logp` is the maximum
+                 `logp` across `new_states`, returned so the caller
+                 can apply threshold pruning without a second pass.
         """
-        l1, l2, l3 = self._l1, self._l2, self._l3
-        bi, tri = self._bi, self._tri
+        l1, l2, l3 = self._lambda1, self._lambda2, self._lambda3
+        bi, tri = self._tag_bigrams, self._tag_trigrams
         new_states = {}
-        for (t_prev2, t_prev), (curr_logp, _) in states.items():
-            bi_dist = bi[t_prev]
-            tri_dist = tri[(t_prev2, t_prev)]
+        best_logp = float("-inf")
+        for (state_i_minus_2, state_i_minus_1), (curr_logp, _) in states.items():
+            bi_dist = bi[state_i_minus_1]
+            tri_dist = tri[(state_i_minus_2, state_i_minus_1)]
             bi_N = bi_dist.N()
             tri_N = tri_dist.N()
             inv_bi = (1.0 / bi_N) if bi_N else 0.0
             inv_tri = (1.0 / tri_N) if tri_N else 0.0
-            for tC, p_uni, log_emit in tag_info:
-                p = l1 * p_uni + l2 * bi_dist[tC] * inv_bi + l3 * tri_dist[tC] * inv_tri
-                lp = (log2(p) if p > 1e-300 else _LOG_FLOOR_2) + log_emit
+            for state_i, p_state_i, log_emit in candidate_tags:
+                p_state_i_given_history = (
+                    l1 * p_state_i
+                    + l2 * bi_dist[state_i] * inv_bi
+                    + l3 * tri_dist[state_i] * inv_tri
+                )
+                lp = (
+                    log2(p_state_i_given_history)
+                    if p_state_i_given_history > 1e-300
+                    else _LOG_FLOOR_2
+                ) + log_emit
                 total_logp = curr_logp + lp
-                new_key = (t_prev, tC)
+                if total_logp > best_logp:
+                    best_logp = total_logp
+                new_key = (state_i_minus_1, state_i)
                 existing = new_states.get(new_key)
                 if existing is None or total_logp > existing[0]:
-                    new_states[new_key] = (total_logp, t_prev2)
-        return new_states
+                    new_states[new_key] = (total_logp, state_i_minus_2)
+        return new_states, best_logp
 
     def tagdata(self, data, segment=False):
         """
-        Tags each sentence in a list of sentences
+        Tags a list of sentences. Each input sentence is a list of words;
+        each output sentence is a list of (word, tag) tuples.
 
-        :param data:list of list of words
-        :type data: [[string,],]
-        :param segment: forwarded to ``tag``; pass True to auto-split
-                        each input on internal [.!?;] punctuation
+        :param data: list of list of words
+        :type  data: list[list[str]]
+        :param segment: forwarded to ``tag``. Pass True to auto-split
+                        each input on internal [.!?;] punctuation.
         :type segment: bool
         :return: list of list of (word, tag) tuples
-
-        Invokes tag(sent) function for each sentence
-        compiles the results into a list of tagged sentences
-        each tagged sentence is a list of (word, tag) tuples
         """
         res = []
         for sent in data:
@@ -458,28 +474,34 @@ class TnT(TaggerI):
             return self._tag_segmented(tokens)
 
         sent = list(tokens)
-        tags = self._tagword(sent)
-        # Strip the [BOS, BOS] prefix and discard the per-tag capitalization flag.
-        return [(w, tag) for w, (tag, _) in zip(sent, tags[2:])]
+        if not sent:
+            return []
+        return self._pair_decoded(sent, self._tagword(sent))
 
     def _tag_segmented(self, tokens):
         """
-        Split `tokens` on [.!?;] and tag each segment as its own
+        Splits `tokens` on [.!?;] and tags each segment as its own
         sentence. Each sentence-final punctuation token stays inside
         the segment that ends with it. A trailing segment without a
         final punctuation is tagged on its own.
         """
-        sent_marks = (".", "!", "?", ";")
         res = []
         segment = []
         for tok in tokens:
             segment.append(tok)
-            if tok in sent_marks:
-                res.extend(self.tag(segment))
+            if tok in _SENT_MARKS:
+                res.extend(self._pair_decoded(segment, self._tagword(segment)))
                 segment = []
         if segment:
-            res.extend(self.tag(segment))
+            res.extend(self._pair_decoded(segment, self._tagword(segment)))
         return res
+
+    @staticmethod
+    def _pair_decoded(words, tags):
+        """Pair words with the tag part of each `_tagword` entry,
+        dropping the [BOS, BOS] prefix and the per-tag capitalization
+        flag."""
+        return [(w, t) for w, (t, _) in zip(words, tags[2:])]
 
     def _tagword(self, sent):
         """
@@ -491,31 +513,28 @@ class TnT(TaggerI):
 
         :param sent: words to tag
         :type sent: list[str]
-        :return: history list `[BOS, BOS, t_0, ..., t_{T-1}]` of
-                 `(tag, capitalization)` pairs.
+        :return: list shaped `[BOS, BOS, state_0, ..., state_{T-1}]`
+                 where each state is a `(tag, capitalization)` pair.
         """
-        BOS = ("BOS", False)
-        EOS = ("EOS", False)
-
         # local bindings avoid repeated attribute lookups in the hot loop
-        wd = self._wd
-        bi = self._bi
-        tri = self._tri
-        uni = self._uni
-        uni_N = self._uni_N
-        l1, l2, l3 = self._l1, self._l2, self._l3
-        log2_N = self._log2_N
-        cap_on = self._C
-        cache = self._tag_info_cache
+        word_tag_freqs = self._word_tag_freqs
+        tag_bigrams = self._tag_bigrams
+        tag_trigrams = self._tag_trigrams
+        tag_unigrams = self._tag_unigrams
+        num_tag_tokens = self._num_tag_tokens
+        l1, l2, l3 = self._lambda1, self._lambda2, self._lambda3
+        log2_beam_threshold = self._log2_beam_threshold
+        cap_on = self._use_capitalization
+        cache = self._candidate_tags_cache
 
-        # Viterbi states per level. Each level maps (tag_{i-1}, tag_i)
-        # to (logp, backpointer_tag_{i-2}).
-        states = {(BOS, BOS): (0.0, BOS)}
-        history = [states]
+        # Viterbi states per level. Each level maps (state_{i-1}, state_i)
+        # to (logp, backpointer_state_{i-2}).
+        states = {(_BOS, _BOS): (0.0, _BOS)}
+        state_history = [states]
 
         for word in sent:
-            C = cap_on and word[0].isupper()
-            wd_word = wd.get(word)
+            c_i = cap_on and word[0].isupper()
+            wd_word = word_tag_freqs.get(word)
             if wd_word is not None:
                 self.known += 1
             else:
@@ -524,24 +543,33 @@ class TnT(TaggerI):
             # External unk taggers may be stateful or context dependent,
             # so we evaluate them on every call rather than memoizing.
             # The known and suffix model paths are pure functions of
-            # `(word, C)` and the trained model state, so they cache.
+            # `(word, c_i)` and the trained model state, so they cache.
             if wd_word is None and self._unk is not None:
                 [(_w, t)] = self._unk.tag([word])
-                tC = (t, C)
-                p_uni = (uni[tC] / uni_N) if uni_N else 0
-                tag_info = [(tC, p_uni, 0.0)]
+                state_i = (t, c_i)
+                p_state_i = (
+                    (tag_unigrams[state_i] / num_tag_tokens) if num_tag_tokens else 0
+                )
+                candidate_tags = ((state_i, p_state_i, 0.0),)
             else:
-                key = (word, C)
-                tag_info = cache.get(key)
-                if tag_info is None:
+                key = (word, c_i)
+                candidate_tags = cache.get(key)
+                if candidate_tags is None:
                     if wd_word is not None:
                         # Per-tag constants depend only on the candidate tag.
-                        tag_info = []
+                        entries = []
                         for t, wc in wd_word.items():
-                            tC = (t, C)
-                            uni_tC = uni[tC]
-                            p_uni = (uni_tC / uni_N) if uni_N else 0
-                            tag_info.append((tC, p_uni, log2(wc / uni_tC)))
+                            state_i = (t, c_i)
+                            unigram_state_i = tag_unigrams[state_i]
+                            p_state_i = (
+                                (unigram_state_i / num_tag_tokens)
+                                if num_tag_tokens
+                                else 0
+                            )
+                            entries.append(
+                                (state_i, p_state_i, log2(wc / unigram_state_i))
+                            )
+                        candidate_tags = tuple(entries)
                     else:
                         # Score this unknown word against every candidate
                         # tag using the Bayes-inverted suffix posterior.
@@ -550,69 +578,82 @@ class TnT(TaggerI):
                             # Fall back to a literal "Unk" tag when there is
                             # no prior to score against, for example when
                             # the tagger has not been trained.
-                            tC = ("Unk", C)
-                            p_uni = (uni[tC] / uni_N) if uni_N else 0
-                            tag_info = [(tC, p_uni, 0.0)]
+                            state_i = ("Unk", c_i)
+                            p_state_i = (
+                                (tag_unigrams[state_i] / num_tag_tokens)
+                                if num_tag_tokens
+                                else 0
+                            )
+                            candidate_tags = ((state_i, p_state_i, 0.0),)
                         else:
-                            tag_info = []
+                            entries = []
                             for t, score in tag_scores.items():
-                                tC = (t, C)
-                                p_uni = (uni[tC] / uni_N) if uni_N else 0
+                                state_i = (t, c_i)
+                                p_state_i = (
+                                    (tag_unigrams[state_i] / num_tag_tokens)
+                                    if num_tag_tokens
+                                    else 0
+                                )
                                 log_score = (
                                     log2(score) if score > 1e-300 else _LOG_FLOOR_2
                                 )
-                                tag_info.append((tC, p_uni, log_score))
-                    cache[key] = tag_info
+                                entries.append((state_i, p_state_i, log_score))
+                            candidate_tags = tuple(entries)
+                    cache[key] = candidate_tags
 
-            new_states = self._expand_states(states, tag_info)
+            new_states, best_logp = self._expand_states(states, candidate_tags)
 
-            # Threshold prune: drop states worse than the best by more than log2(N).
-            best_logp = max(s[0] for s in new_states.values())
-            cutoff = best_logp - log2_N
+            # Threshold prune drops states worse than the best by more than log2(N).
+            cutoff = best_logp - log2_beam_threshold
             new_states = {k: v for k, v in new_states.items() if v[0] >= cutoff}
 
             states = new_states
-            history.append(states)
+            state_history.append(states)
 
         # Score the EOS transition with the same deleted interpolation
         # used for every other tag, then pick the best final state.
-        # `states` is non-empty by construction, so seeding the search
-        # with its first key keeps the type concrete.
-        p_uni_eos = (uni[EOS] / uni_N) if uni_N else 0
-        best_final_key = next(iter(states))
+        # `states` is non-empty by construction, so we seed with any
+        # key to avoid an Optional placeholder.
+        p_eos_unigram = (tag_unigrams[_EOS] / num_tag_tokens) if num_tag_tokens else 0
+        best_final_state = next(iter(states))
         best_final_logp = float("-inf")
-        for (t_prev2, t_prev), (curr_logp, _) in states.items():
-            bi_dist = bi[t_prev]
-            tri_dist = tri[(t_prev2, t_prev)]
-            bi_N = bi_dist.N()
-            tri_N = tri_dist.N()
-            p_bi = (bi_dist[EOS] / bi_N) if bi_N else 0
-            p_tri = (tri_dist[EOS] / tri_N) if tri_N else 0
-            p = l1 * p_uni_eos + l2 * p_bi + l3 * p_tri
-            eos_lp = log2(p) if p > 1e-300 else _LOG_FLOOR_2
+        for (state_i_minus_2, state_i_minus_1), (curr_logp, _) in states.items():
+            bigram_dist = tag_bigrams[state_i_minus_1]
+            trigram_dist = tag_trigrams[(state_i_minus_2, state_i_minus_1)]
+            bigram_N = bigram_dist.N()
+            trigram_N = trigram_dist.N()
+            p_bi = (bigram_dist[_EOS] / bigram_N) if bigram_N else 0
+            p_tri = (trigram_dist[_EOS] / trigram_N) if trigram_N else 0
+            p_eos_given_history = l1 * p_eos_unigram + l2 * p_bi + l3 * p_tri
+            eos_lp = (
+                log2(p_eos_given_history)
+                if p_eos_given_history > 1e-300
+                else _LOG_FLOOR_2
+            )
             final_logp = curr_logp + eos_lp
             if final_logp > best_final_logp:
                 best_final_logp = final_logp
-                best_final_key = (t_prev2, t_prev)
+                best_final_state = (state_i_minus_2, state_i_minus_1)
 
         # Reconstruct the best path by walking backpointers, collecting
-        # tags in reverse. At level L the key is (tag_{L-2}, tag_{L-1})
-        # and the stored backpointer is tag_{L-3}, so each iteration
-        # extends one tag toward the start of the sentence.
+        # states in reverse. At level L the key is
+        # (state_{L-2}, state_{L-1}) and the stored backpointer is
+        # state_{L-3}, so each iteration extends one state toward the
+        # start of the sentence.
         T = len(sent)
         if T == 0:
-            return [BOS, BOS]
+            return [_BOS, _BOS]
 
-        tags_reversed = [best_final_key[1]]
+        tags_reversed = [best_final_state[1]]
         if T >= 2:
-            tags_reversed.append(best_final_key[0])
-        current_key = best_final_key
+            tags_reversed.append(best_final_state[0])
+        current_key = best_final_state
         for level in range(T, 2, -1):
-            backpointer = history[level][current_key][1]
+            backpointer = state_history[level][current_key][1]
             tags_reversed.append(backpointer)
             current_key = (backpointer, current_key[0])
         tags_reversed.reverse()
-        return [BOS, BOS] + tags_reversed
+        return [_BOS, _BOS] + tags_reversed
 
 
 ########################################
@@ -647,18 +688,17 @@ def basic_sent_chop(data, raw=True):
 
     new_data = []
     curr_sent = []
-    sent_mark = [".", "!", "?", ";"]
 
     if raw:
         for word in data:
             curr_sent.append(word)
-            if word in sent_mark:
+            if word in _SENT_MARKS:
                 new_data.append(curr_sent)
                 curr_sent = []
     else:
         for word, tag in data:
             curr_sent.append((word, tag))
-            if word in sent_mark:
+            if word in _SENT_MARKS:
                 new_data.append(curr_sent)
                 curr_sent = []
 

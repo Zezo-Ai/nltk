@@ -117,6 +117,16 @@ class TnT(TaggerI):
         :type  C: bool
         """
 
+        # Reject N values that would break the log2() and pruning math
+        # later. The chained comparison rejects NaN (any compare with
+        # NaN is False) and both infinities, plus anything below 1.
+        if (
+            isinstance(N, bool)
+            or not isinstance(N, (int, float))
+            or not (1 <= N < float("inf"))
+        ):
+            raise ValueError(f"N must be a finite number >= 1, got {N!r}")
+
         self._tag_unigrams = FreqDist()
         self._tag_bigrams = ConditionalFreqDist()
         self._tag_trigrams = ConditionalFreqDist()
@@ -151,47 +161,59 @@ class TnT(TaggerI):
 
     def train(self, data):
         """
-        Trains the tagger on a list of tagged sentences. If an external
-        unknown-word tagger was passed via ``unk``, it is trained on the
-        same data on the first call only. Resets the decode cache and
-        populates the n-gram counts, the suffix model, and the
-        deleted-interpolation weights.
+        Trains the tagger on a list of tagged sentences. Each call
+        rebuilds the model from scratch on the supplied data. The
+        n-gram counts, word-tag lexicon, suffix model, and
+        deleted-interpolation weights are all replaced, and the decode
+        cache is cleared.
+
+        The optional external unknown-word tagger (``unk``) is trained
+        on the supplied data only the first time ``train()`` is called.
+        Subsequent calls leave it alone, since retraining it on each
+        new training set is rarely what callers want.
 
         :param data: list of lists of (word, tag) tuples
         :type  data: list[list[tuple[str, str]]]
         """
 
-        # The decode cache is keyed off post-train state, so a fresh
-        # train() invalidates every entry.
+        # Reset the parts of the model state that accumulate during
+        # training. The suffix model state and lambda weights are
+        # rebuilt unconditionally further down, so they don't need an
+        # explicit reset here. `_unk_trained` is preserved so the
+        # external unk tagger trains only on the first call.
         self._candidate_tags_cache.clear()
+        self._tag_unigrams = FreqDist()
+        self._tag_bigrams = ConditionalFreqDist()
+        self._tag_trigrams = ConditionalFreqDist()
+        self._word_tag_freqs = ConditionalFreqDist()
 
         if self._unk is not None and not self._unk_trained:
             self._unk.train(data)
 
-        wd = self._word_tag_freqs
-        uni = self._tag_unigrams
-        bi = self._tag_bigrams
-        tri = self._tag_trigrams
+        word_tag_freqs = self._word_tag_freqs
+        tag_unigrams = self._tag_unigrams
+        tag_bigrams = self._tag_bigrams
+        tag_trigrams = self._tag_trigrams
         cap_on = self._use_capitalization
 
         for sent in data:
             state_i_minus_2 = _BOS
             state_i_minus_1 = _BOS
-            for w, t in sent:
-                c_i = cap_on and bool(w) and w[0].isupper()
-                state_i = (t, c_i)
-                wd[w][t] += 1
-                uni[state_i] += 1
-                bi[state_i_minus_1][state_i] += 1
-                tri[(state_i_minus_2, state_i_minus_1)][state_i] += 1
+            for word, tag in sent:
+                c_i = cap_on and bool(word) and word[0].isupper()
+                state_i = (tag, c_i)
+                word_tag_freqs[word][tag] += 1
+                tag_unigrams[state_i] += 1
+                tag_bigrams[state_i_minus_1][state_i] += 1
+                tag_trigrams[(state_i_minus_2, state_i_minus_1)][state_i] += 1
                 state_i_minus_2, state_i_minus_1 = state_i_minus_1, state_i
 
             # Record EOS as a pseudo-tag in the n-gram counts. Skip empty
             # sentences so we don't add an EOS count to the BOS state.
             if sent:
-                uni[_EOS] += 1
-                bi[state_i_minus_1][_EOS] += 1
-                tri[(state_i_minus_2, state_i_minus_1)][_EOS] += 1
+                tag_unigrams[_EOS] += 1
+                tag_bigrams[state_i_minus_1][_EOS] += 1
+                tag_trigrams[(state_i_minus_2, state_i_minus_1)][_EOS] += 1
 
         self._compute_lambda()
 
@@ -219,13 +241,13 @@ class TnT(TaggerI):
         """
         # Tag priors over raw tags (excluding EOS), P(t) = f(t) / sum_t' f(t')
         tag_counts = {}
-        for (t, _), count in self._tag_unigrams.items():
-            if t == "EOS":
+        for (tag, _), count in self._tag_unigrams.items():
+            if tag == "EOS":
                 continue
-            tag_counts[t] = tag_counts.get(t, 0) + count
+            tag_counts[tag] = tag_counts.get(tag, 0) + count
         total = sum(tag_counts.values())
         if total > 0:
-            self._tag_prior_probs = {t: c / total for t, c in tag_counts.items()}
+            self._tag_prior_probs = {tag: c / total for tag, c in tag_counts.items()}
         else:
             self._tag_prior_probs = {}
 
@@ -245,14 +267,14 @@ class TnT(TaggerI):
             True: ConditionalFreqDist(),
         }
         for word in self._word_tag_freqs.conditions():
-            word_tag_freqs = self._word_tag_freqs[word]
-            if word_tag_freqs.N() > 10 or not word:
+            tag_freqs = self._word_tag_freqs[word]
+            if tag_freqs.N() > 10 or not word:
                 continue
-            trie = self._suffix_trie_by_cap[word[0].isupper()]
+            suffix_trie = self._suffix_trie_by_cap[word[0].isupper()]
             for m in range(1, min(len(word), 10) + 1):
-                trie_suffix = trie[word[-m:]]
-                for t, count in word_tag_freqs.items():
-                    trie_suffix[t] += count
+                suffix_dist = suffix_trie[word[-m:]]
+                for tag, count in tag_freqs.items():
+                    suffix_dist[tag] += count
 
     def _compute_lambda(self):
         """
@@ -276,11 +298,10 @@ class TnT(TaggerI):
         tag_unigrams = self._tag_unigrams
         unigram_n_minus_1 = tag_unigrams.N() - 1
 
-        for history in self._tag_trigrams.conditions():
-            _, h2 = history
-            trigram_dist = self._tag_trigrams[history]
+        for state_i_minus_2, state_i_minus_1 in self._tag_trigrams.conditions():
+            trigram_dist = self._tag_trigrams[(state_i_minus_2, state_i_minus_1)]
             trigram_n_minus_1 = trigram_dist.N() - 1
-            bigram_dist = tag_bigrams[h2]
+            bigram_dist = tag_bigrams[state_i_minus_1]
             bigram_n_minus_1 = bigram_dist.N() - 1
 
             for state_i, count in trigram_dist.items():
@@ -310,14 +331,19 @@ class TnT(TaggerI):
                 if w3:
                     lambda3_mass += share
 
-        # If no trigrams contributed (empty or pathological training input),
-        # leave the weights at their __init__ zero defaults rather than
-        # dividing by zero. Decode will fall back to the unigram emission.
+        # If no trigrams contributed (empty or pathological training
+        # input), zero the weights explicitly rather than dividing by
+        # zero or leaving stale values from a prior train(). Decode
+        # will fall back to the unigram emission.
         total_mass = lambda1_mass + lambda2_mass + lambda3_mass
         if total_mass > 0:
             self._lambda1 = lambda1_mass / total_mass
             self._lambda2 = lambda2_mass / total_mass
             self._lambda3 = lambda3_mass / total_mass
+        else:
+            self._lambda1 = 0.0
+            self._lambda2 = 0.0
+            self._lambda3 = 0.0
 
     def _unknown_tag_scores(self, word):
         """
@@ -348,14 +374,14 @@ class TnT(TaggerI):
             return {}
 
         is_capitalized = bool(word) and word[0].isupper()
-        trie = self._suffix_trie_by_cap[is_capitalized]
+        suffix_trie = self._suffix_trie_by_cap[is_capitalized]
         theta = self._theta
 
         # Find the longest known suffix by scanning from 10 down to 1.
         # If none is found, the loop below leaves P at the unigram prior.
         longest = 0
         for m in range(min(len(word), 10), 0, -1):
-            if word[-m:] in trie:
+            if word[-m:] in suffix_trie:
                 longest = m
                 break
 
@@ -364,21 +390,21 @@ class TnT(TaggerI):
         p_t_given_suffix = dict(tag_priors)
         denom = 1.0 + theta
         for i in range(1, longest + 1):
-            suffix_dist = trie[word[-i:]]
+            suffix_dist = suffix_trie[word[-i:]]
             suffix_N = suffix_dist.N()
             if suffix_N == 0:
                 continue
-            inv_N = 1.0 / suffix_N
-            for t in tag_priors:
-                p_t_given_suffix[t] = (
-                    suffix_dist[t] * inv_N + theta * p_t_given_suffix[t]
+            inv_suffix_N = 1.0 / suffix_N
+            for tag in tag_priors:
+                p_t_given_suffix[tag] = (
+                    suffix_dist[tag] * inv_suffix_N + theta * p_t_given_suffix[tag]
                 ) / denom
 
         # Apply Bayesian inversion so the result ranks by P(suffix | t),
         # which is proportional to P(t | suffix) / P(t).
         return {
-            t: p_t_given_suffix[t] / prior
-            for t, prior in tag_priors.items()
+            tag: p_t_given_suffix[tag] / prior
+            for tag, prior in tag_priors.items()
             if prior > 0
         }
 
@@ -406,35 +432,36 @@ class TnT(TaggerI):
                  `logp` across `new_states`, returned so the caller
                  can apply threshold pruning without a second pass.
         """
-        l1, l2, l3 = self._lambda1, self._lambda2, self._lambda3
-        bi, tri = self._tag_bigrams, self._tag_trigrams
+        lambda1, lambda2, lambda3 = self._lambda1, self._lambda2, self._lambda3
+        tag_bigrams = self._tag_bigrams
+        tag_trigrams = self._tag_trigrams
         new_states = {}
         best_logp = float("-inf")
-        for (state_i_minus_2, state_i_minus_1), (curr_logp, _) in states.items():
-            bi_dist = bi[state_i_minus_1]
-            tri_dist = tri[(state_i_minus_2, state_i_minus_1)]
-            bi_N = bi_dist.N()
-            tri_N = tri_dist.N()
-            inv_bi = (1.0 / bi_N) if bi_N else 0.0
-            inv_tri = (1.0 / tri_N) if tri_N else 0.0
+        for (state_i_minus_2, state_i_minus_1), (prefix_logp, _) in states.items():
+            bigram_dist = tag_bigrams[state_i_minus_1]
+            trigram_dist = tag_trigrams[(state_i_minus_2, state_i_minus_1)]
+            bigram_N = bigram_dist.N()
+            trigram_N = trigram_dist.N()
+            inv_bigram_N = (1.0 / bigram_N) if bigram_N else 0.0
+            inv_trigram_N = (1.0 / trigram_N) if trigram_N else 0.0
             for state_i, p_state_i, log_emit in candidate_tags:
                 p_state_i_given_history = (
-                    l1 * p_state_i
-                    + l2 * bi_dist[state_i] * inv_bi
-                    + l3 * tri_dist[state_i] * inv_tri
+                    lambda1 * p_state_i
+                    + lambda2 * bigram_dist[state_i] * inv_bigram_N
+                    + lambda3 * trigram_dist[state_i] * inv_trigram_N
                 )
-                lp = (
+                step_logp = (
                     log2(p_state_i_given_history)
                     if p_state_i_given_history > 1e-300
                     else _LOG_FLOOR_2
                 ) + log_emit
-                total_logp = curr_logp + lp
-                if total_logp > best_logp:
-                    best_logp = total_logp
-                new_key = (state_i_minus_1, state_i)
-                existing = new_states.get(new_key)
-                if existing is None or total_logp > existing[0]:
-                    new_states[new_key] = (total_logp, state_i_minus_2)
+                path_logp = prefix_logp + step_logp
+                if path_logp > best_logp:
+                    best_logp = path_logp
+                next_state = (state_i_minus_1, state_i)
+                prev_best = new_states.get(next_state)
+                if prev_best is None or path_logp > prev_best[0]:
+                    new_states[next_state] = (path_logp, state_i_minus_2)
         return new_states, best_logp
 
     def tagdata(self, data, segment=False):
@@ -449,11 +476,11 @@ class TnT(TaggerI):
         :type segment: bool
         :return: list of list of (word, tag) tuples
         """
-        res = []
+        tagged_sents = []
         for sent in data:
-            res1 = self.tag(sent, segment=segment)
-            res.append(res1)
-        return res
+            tagged_sent = self.tag(sent, segment=segment)
+            tagged_sents.append(tagged_sent)
+        return tagged_sents
 
     def tag(self, tokens, segment=False):
         """
@@ -526,7 +553,7 @@ class TnT(TaggerI):
         tag_trigrams = self._tag_trigrams
         tag_unigrams = self._tag_unigrams
         num_tag_tokens = self._num_tag_tokens
-        l1, l2, l3 = self._lambda1, self._lambda2, self._lambda3
+        lambda1, lambda2, lambda3 = self._lambda1, self._lambda2, self._lambda3
         log2_beam_threshold = self._log2_beam_threshold
         cap_on = self._use_capitalization
         cache = self._candidate_tags_cache
@@ -538,8 +565,8 @@ class TnT(TaggerI):
 
         for word in sent:
             c_i = cap_on and bool(word) and word[0].isupper()
-            wd_word = word_tag_freqs.get(word)
-            if wd_word is not None:
+            tag_freqs = word_tag_freqs.get(word)
+            if tag_freqs is not None:
                 self.known += 1
             else:
                 self.unknown += 1
@@ -548,7 +575,7 @@ class TnT(TaggerI):
             # so we evaluate them on every call rather than memoizing.
             # The known and suffix model paths are pure functions of
             # `(word, c_i)` and the trained model state, so they cache.
-            if wd_word is None and self._unk is not None:
+            if tag_freqs is None and self._unk is not None:
                 [(_w, t)] = self._unk.tag([word])
                 state_i = (t, c_i)
                 p_state_i = (
@@ -556,13 +583,13 @@ class TnT(TaggerI):
                 )
                 candidate_tags = ((state_i, p_state_i, 0.0),)
             else:
-                key = (word, c_i)
-                candidate_tags = cache.get(key)
+                cache_key = (word, c_i)
+                candidate_tags = cache.get(cache_key)
                 if candidate_tags is None:
-                    if wd_word is not None:
+                    if tag_freqs is not None:
                         # Per-tag constants depend only on the candidate tag.
                         entries = []
-                        for t, wc in wd_word.items():
+                        for t, tag_count in tag_freqs.items():
                             state_i = (t, c_i)
                             unigram_state_i = tag_unigrams[state_i]
                             p_state_i = (
@@ -571,7 +598,11 @@ class TnT(TaggerI):
                                 else 0
                             )
                             entries.append(
-                                (state_i, p_state_i, log2(wc / unigram_state_i))
+                                (
+                                    state_i,
+                                    p_state_i,
+                                    log2(tag_count / unigram_state_i),
+                                )
                             )
                         candidate_tags = tuple(entries)
                     else:
@@ -603,7 +634,7 @@ class TnT(TaggerI):
                                 )
                                 entries.append((state_i, p_state_i, log_score))
                             candidate_tags = tuple(entries)
-                    cache[key] = candidate_tags
+                    cache[cache_key] = candidate_tags
 
             new_states, best_logp = self._expand_states(states, candidate_tags)
 
@@ -621,20 +652,24 @@ class TnT(TaggerI):
         p_eos_unigram = (tag_unigrams[_EOS] / num_tag_tokens) if num_tag_tokens else 0
         best_final_state = next(iter(states))
         best_final_logp = float("-inf")
-        for (state_i_minus_2, state_i_minus_1), (curr_logp, _) in states.items():
+        for (state_i_minus_2, state_i_minus_1), (prefix_logp, _) in states.items():
             bigram_dist = tag_bigrams[state_i_minus_1]
             trigram_dist = tag_trigrams[(state_i_minus_2, state_i_minus_1)]
             bigram_N = bigram_dist.N()
             trigram_N = trigram_dist.N()
-            p_bi = (bigram_dist[_EOS] / bigram_N) if bigram_N else 0
-            p_tri = (trigram_dist[_EOS] / trigram_N) if trigram_N else 0
-            p_eos_given_history = l1 * p_eos_unigram + l2 * p_bi + l3 * p_tri
-            eos_lp = (
+            p_eos_bigram = (bigram_dist[_EOS] / bigram_N) if bigram_N else 0
+            p_eos_trigram = (trigram_dist[_EOS] / trigram_N) if trigram_N else 0
+            p_eos_given_history = (
+                lambda1 * p_eos_unigram
+                + lambda2 * p_eos_bigram
+                + lambda3 * p_eos_trigram
+            )
+            eos_logp = (
                 log2(p_eos_given_history)
                 if p_eos_given_history > 1e-300
                 else _LOG_FLOOR_2
             )
-            final_logp = curr_logp + eos_lp
+            final_logp = prefix_logp + eos_logp
             if final_logp > best_final_logp:
                 best_final_logp = final_logp
                 best_final_state = (state_i_minus_2, state_i_minus_1)
@@ -651,11 +686,11 @@ class TnT(TaggerI):
         tags_reversed = [best_final_state[1]]
         if T >= 2:
             tags_reversed.append(best_final_state[0])
-        current_key = best_final_state
+        current_state = best_final_state
         for level in range(T, 2, -1):
-            backpointer = state_history[level][current_key][1]
+            backpointer = state_history[level][current_state][1]
             tags_reversed.append(backpointer)
-            current_key = (backpointer, current_key[0])
+            current_state = (backpointer, current_state[0])
         tags_reversed.reverse()
         return [_BOS, _BOS] + tags_reversed
 

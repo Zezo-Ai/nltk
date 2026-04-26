@@ -84,9 +84,10 @@ def langname(tag, typ="full", strict=False):
                 return name  # include all subtags
             else:
                 return name.split(":")[0]  # only the language subtag
+    failed = f"Could not find language name for tag {tag!r}"
     if strict:
-        raise LookupError(f"Could not find language name for tag {tag!r}")
-    warn(f"Could not find code in {code!r}", stacklevel=2)
+        raise LookupError(failed)
+    warn(failed, stacklevel=2)
 
 
 def langcode(name, typ=2, strict=False):
@@ -190,7 +191,12 @@ def q2tag(qcode, strict=False):
     if not hasattr(bcp47, "wiki_q") or bcp47.wiki_q is None:
         bcp47.load_wiki_q()  # Wikidata conversion table needs to be loaded explicitly
     if not hasattr(bcp47, "wiki_bcp47") or bcp47.wiki_bcp47 is None:
-        bcp47.wiki_bcp47 = inverse_dict(bcp47.wiki_q)
+        inverse = inverse_dict(bcp47.wiki_q)
+        if inverse is None:
+            raise ValueError(
+                "The Wikidata mapping (wiki_q) is not bijective. Cannot safely build inverse mapping."
+            )
+        bcp47.wiki_bcp47 = inverse
     result = bcp47.wiki_bcp47.get(qcode)
     if result is None and strict:
         raise LookupError(f"Could not find BCP-47 tag for Wikidata Q-code {qcode!r}")

@@ -108,19 +108,18 @@ class TnT(TaggerI):
                         tagger on the next train() call.
         :type  Trained: bool
         :param N: Beam search pruning threshold. After each Viterbi
-                  step any state whose log-probability is worse than
-                  the best by more than a factor of N is discarded.
-                  1000 is a good default.
+                step any state whose log-probability is worse than
+                the best by more than a factor of N is discarded.
+                1000 is a good default.
         :type  N: int
         :param C: Capitalization flag. When True, tags are differentiated
-                  by whether the source word is capitalized. This rarely
-                  improves accuracy in practice.
+                by whether the source word is capitalized. This rarely
+                improves accuracy in practice.
         :type  C: bool
         """
 
-        # Reject N values that would break the log2() and pruning math
-        # later. The chained comparison rejects NaN (any compare with
-        # NaN is False) and both infinities, plus anything below 1.
+        # Beam thresholding uses log2(N), so N must be finite and at least 1.
+        # The explicit bool check matters because bool is a subclass of int.
         if (
             isinstance(N, bool)
             or not isinstance(N, (int, float))
@@ -142,9 +141,8 @@ class TnT(TaggerI):
         self._num_tag_tokens = 0
         self._log2_beam_threshold = 0.0
 
-        # Suffix model state for unknown words. Two tries split by word
-        # capitalization, plus the smoothing weight and tag priors used
-        # by the recursion at decode time.
+        # Unknown-word decoding uses a capitalization split suffix model, a
+        # raw tag prior, and theta for successive abstraction smoothing.
         self._suffix_trie_by_cap = {
             False: ConditionalFreqDist(),
             True: ConditionalFreqDist(),
@@ -154,7 +152,8 @@ class TnT(TaggerI):
 
         self._unk = unk
 
-        # Cleared on train because model state changes.
+        # The cache depends entirely on trained model state, so it starts
+        # empty here and is cleared whenever train() rebuilds the model.
         self._candidate_tags_cache = {}
 
         self.unknown = 0
@@ -177,11 +176,8 @@ class TnT(TaggerI):
         :type  data: list[list[tuple[str, str]]]
         """
 
-        # Reset the parts of the model state that accumulate during
-        # training. The suffix model state and lambda weights are
-        # rebuilt unconditionally further down, so they don't need an
-        # explicit reset here. `_unk_trained` is preserved so the
-        # external unk tagger trains only on the first call.
+        # These structures accumulate corpus statistics, so retraining must
+        # rebuild them from scratch rather than layer new counts on top.
         self._candidate_tags_cache.clear()
         self._tag_unigrams = FreqDist()
         self._tag_bigrams = ConditionalFreqDist()
@@ -209,8 +205,9 @@ class TnT(TaggerI):
                 tag_trigrams[(state_i_minus_2, state_i_minus_1)][state_i] += 1
                 state_i_minus_2, state_i_minus_1 = state_i_minus_1, state_i
 
-            # Record EOS as a pseudo-tag in the n-gram counts. Skip empty
-            # sentences so we don't add an EOS count to the BOS state.
+            # EOS is treated as an ordinary next state in the n-gram model,
+            # but empty sentences are skipped so BOS does not acquire EOS as
+            # a spurious successor.
             if sent:
                 tag_unigrams[_EOS] += 1
                 tag_bigrams[state_i_minus_1][_EOS] += 1
@@ -218,12 +215,13 @@ class TnT(TaggerI):
 
         self._compute_lambda()
 
+        # This total intentionally includes EOS because the unigram model
+        # and deleted interpolation are estimated over the same event stream.
         self._num_tag_tokens = self._tag_unigrams.N()
         self._log2_beam_threshold = log2(self._beam_threshold)
 
         self._build_suffix_model()
 
-        # Prevents repeat train() calls from retraining the optional unk tagger.
         self._unk_trained = True
 
     def _build_suffix_model(self):
@@ -240,7 +238,6 @@ class TnT(TaggerI):
         on the reasoning that frequent words tell us little about what
         unseen words might look like.
         """
-        # Tag priors over raw tags (excluding EOS), P(t) = f(t) / sum_t' f(t')
         tag_counts = {}
         for (tag, _), count in self._tag_unigrams.items():
             if tag == "EOS":
@@ -252,8 +249,8 @@ class TnT(TaggerI):
         else:
             self._tag_prior_probs = {}
 
-        # theta is the standard deviation of the unconditioned tag priors.
-        # This is the sample standard deviation per the paper's formula.
+        # Theta controls how strongly the suffix recursion is pulled back
+        # toward the less specific estimate at each abstraction step.
         priors = list(self._tag_prior_probs.values())
         n = len(priors)
         if n > 1:
@@ -262,7 +259,8 @@ class TnT(TaggerI):
         else:
             self._theta = 0.0
 
-        # Build the two suffix tries from infrequent lexicon words only.
+        # Each capitalization bucket stores every suffix length up to 10,
+        # so decode can walk from the shortest matched ending to the longest.
         self._suffix_trie_by_cap = {
             False: ConditionalFreqDist(),
             True: ConditionalFreqDist(),
@@ -306,6 +304,9 @@ class TnT(TaggerI):
             bigram_n_minus_1 = bigram_dist.N() - 1
 
             for state_i, count in trigram_dist.items():
+                # Subtracting one leaves the current event out, so each score
+                # asks which model order would best predict this tag if this
+                # occurrence were held out.
                 c3 = (count - 1) / trigram_n_minus_1 if trigram_n_minus_1 else 0
                 c2 = (
                     (bigram_dist[state_i] - 1) / bigram_n_minus_1
@@ -318,8 +319,9 @@ class TnT(TaggerI):
                     else 0
                 )
 
-                # Split the trigram's count equally among the lambdas
-                # whose c value ties for the maximum.
+                # The trigram's count is credited to the model order with the
+                # strongest held out estimate. Splitting ties evenly avoids
+                # introducing an arbitrary preference between orders.
                 maxc = max(c1, c2, c3)
                 w1 = c1 == maxc
                 w2 = c2 == maxc
@@ -332,10 +334,9 @@ class TnT(TaggerI):
                 if w3:
                     lambda3_mass += share
 
-        # If no trigrams contributed (empty or pathological training
-        # input), zero the weights explicitly rather than dividing by
-        # zero or leaving stale values from a prior train(). Decode
-        # will fall back to the unigram emission.
+        # Normalization turns the accumulated winning mass into mixture
+        # weights. Keeping the zero case explicit prevents a degenerate
+        # training run from dividing by zero or reusing stale weights.
         total_mass = lambda1_mass + lambda2_mass + lambda3_mass
         if total_mass > 0:
             self._lambda1 = lambda1_mass / total_mass
@@ -365,10 +366,10 @@ class TnT(TaggerI):
         the prior, which is the back-off case.
 
         :return: Bayes-inverted scores. Each raw tag maps to a quantity
-                 proportional to P(suffix | t). The P(suffix) constant
-                 drops out because it does not depend on the tag, which
-                 preserves the argmax without computing it. Tags with
-                 zero prior are omitted.
+                proportional to P(suffix | t). The P(suffix) constant
+                drops out because it does not depend on the tag, which
+                preserves the argmax without computing it. Tags with
+                zero prior are omitted.
         """
         tag_priors = self._tag_prior_probs
         if not tag_priors:
@@ -378,38 +379,68 @@ class TnT(TaggerI):
         suffix_trie = self._suffix_trie_by_cap[is_capitalized]
         theta = self._theta
 
-        # Find the longest known suffix by scanning from 10 down to 1.
-        # If none is found, the loop below leaves P at the unigram prior.
+        # The trie contains every suffix length up to the cutoff. Once the
+        # longest matching suffix is found, all shorter suffixes are also
+        # available for successive abstraction.
         longest = 0
         for m in range(min(len(word), 10), 0, -1):
             if word[-m:] in suffix_trie:
                 longest = m
                 break
 
-        # Successive abstraction from the prior up to the longest suffix.
-        # Update in place since we only touch existing keys. Skip suffix
-        # lengths whose tail is not in the trie rather than indexing in
-        # (which would insert an empty defaultdict entry on every miss).
-        p_t_given_suffix = dict(tag_priors)
-        denom = 1.0 + theta
-        for i in range(1, longest + 1):
-            suffix_key = word[-i:]
-            if suffix_key not in suffix_trie:
-                continue
-            suffix_dist = suffix_trie[suffix_key]
-            inv_suffix_N = 1.0 / suffix_dist.N()
-            for tag in tag_priors:
-                p_t_given_suffix[tag] = (
-                    suffix_dist[tag] * inv_suffix_N + theta * p_t_given_suffix[tag]
-                ) / denom
+        # No matched suffix means the estimate stays at the unigram prior.
+        # After Bayes inversion, every tag then receives the same score.
+        if longest == 0:
+            return {tag: 1.0 for tag, prior in tag_priors.items() if prior > 0}
 
-        # Apply Bayesian inversion so the result ranks by P(suffix | t),
-        # which is proportional to P(t | suffix) / P(t).
-        return {
-            tag: p_t_given_suffix[tag] / prior
-            for tag, prior in tag_priors.items()
-            if prior > 0
-        }
+        # With theta equal to zero there is no smoothing, so the estimate is
+        # just the empirical distribution of the longest matched suffix.
+        if theta == 0.0:
+            suffix_dist = suffix_trie[word[-longest:]]
+            inv_suffix_N = 1.0 / suffix_dist.N()
+            return {
+                tag: (suffix_dist[tag] * inv_suffix_N) / prior
+                for tag, prior in tag_priors.items()
+                if prior > 0
+            }
+
+        # Dense successive abstraction updates every tag at every suffix
+        # length. For tags absent from the current suffix bucket, that update
+        # is the same shared shrinkage. Factor that shared term into one
+        # scalar, and keep only tag specific corrections in delta.
+        denom = 1.0 + theta
+        miss_scale = theta / denom
+
+        global_scale = 1.0
+        delta = {}
+
+        for i in range(1, longest + 1):
+            suffix_dist = suffix_trie[word[-i:]]
+            inv_suffix_N = 1.0 / suffix_dist.N()
+
+            # Apply the shared shrinkage for all tags, then add the suffix
+            # evidence only for tags observed in this bucket.
+            global_scale *= miss_scale
+            corr_scale = inv_suffix_N / (denom * global_scale)
+
+            for tag, count in suffix_dist.items():
+                delta[tag] = delta.get(tag, 0.0) + count * corr_scale
+
+        # In the factored form, Bayes inversion becomes
+        #   P(t | suffix) / P(t) = global_scale * (1 + delta[t] / P(t)).
+        # Untouched tags share one score. Touched tags get a correction
+        # relative to their unigram prior.
+        result = {}
+        for tag, prior in tag_priors.items():
+            if prior <= 0:
+                continue
+            extra = delta.get(tag)
+            if extra is None:
+                result[tag] = global_scale
+            else:
+                result[tag] = global_scale * (1.0 + extra / prior)
+
+        return result
 
     def _expand_states(self, states, candidate_tags):
         """
@@ -463,6 +494,8 @@ class TnT(TaggerI):
                     best_logp = path_logp
                 next_state = (state_i_minus_1, state_i)
                 prev_best = new_states.get(next_state)
+                # Once the last two states match, only the better prefix matters.
+                # All future transitions depend on this key alone.
                 if prev_best is None or path_logp > prev_best[0]:
                     new_states[next_state] = (path_logp, state_i_minus_2)
         return new_states, best_logp
@@ -479,11 +512,7 @@ class TnT(TaggerI):
         :type segment: bool
         :return: list of list of (word, tag) tuples
         """
-        tagged_sents = []
-        for sent in data:
-            tagged_sent = self.tag(sent, segment=segment)
-            tagged_sents.append(tagged_sent)
-        return tagged_sents
+        return [self.tag(sent, segment=segment) for sent in data]
 
     def tag(self, tokens, segment=False):
         """
@@ -506,100 +535,115 @@ class TnT(TaggerI):
         """
         if segment:
             return self._tag_segmented(tokens)
-
-        sent = list(tokens)
-        if not sent:
+        if not (sent := list(tokens)):
             return []
         return self._pair_decoded(sent, self._tagword(sent))
 
     def _tag_segmented(self, tokens):
         """
-        Splits `tokens` on [.!?;] and tags each segment as its own
-        sentence. Each sentence-final punctuation token stays inside
-        the segment that ends with it. A trailing segment without a
-        final punctuation is tagged on its own.
+        Tag ``tokens`` as one or more sentences split on ``[.!?;]``.
+
+        Each sentence-final punctuation token stays with the segment it
+        closes, and a trailing fragment without sentence-final punctuation
+        is still tagged as its own segment.
         """
-        res = []
+        tagged = []
         segment = []
+
+        sent_marks = _SENT_MARKS
+        tagword = self._tagword
+        pair_decoded = self._pair_decoded
+        extend = tagged.extend
+
         for tok in tokens:
             segment.append(tok)
-            if tok in _SENT_MARKS:
-                res.extend(self._pair_decoded(segment, self._tagword(segment)))
-                segment = []
+            if tok in sent_marks:
+                extend(pair_decoded(segment, tagword(segment)))
+                segment.clear()
+
         if segment:
-            res.extend(self._pair_decoded(segment, self._tagword(segment)))
-        return res
+            extend(pair_decoded(segment, tagword(segment)))
+
+        return tagged
 
     @staticmethod
-    def _pair_decoded(words, tags):
-        """Pair words with the tag part of each `_tagword` entry,
-        dropping the [BOS, BOS] prefix and the per-tag capitalization
-        flag."""
-        return [(w, t) for w, (t, _) in zip(words, tags[2:])]
+    def _pair_decoded(words, states):
+        """Convert `_tagword` output into ``(word, tag)`` pairs by dropping
+        the two BOS entries and the capitalization flag from each state."""
+        return [(word, states[i + 2][0]) for i, word in enumerate(words)]
 
     def _tagword(self, sent):
         """
-        Tag a sentence by Viterbi decoding with second-order state
-        merging. The per-word work (scoring, expansion, merging) lives
-        in `_expand_states`. We threshold-prune after each word, then
-        score the EOS transition over the surviving states and walk
-        backpointers to reconstruct the best path.
+        Tag one sentence with second-order Viterbi decoding.
+
+        The lattice state is the last two tag states, so paths that share
+        ``(state_{i-1}, state_i)`` are merged immediately. Known words draw
+        candidates from the lexicon. Unknown words are scored either by the
+        external ``unk`` tagger or by the suffix model. After each word, the
+        beam keeps only states whose score is within ``log2(N)`` of the best
+        surviving path. The decode then scores an explicit EOS transition
+        and walks backpointers to recover the best state sequence.
 
         :param sent: words to tag
         :type sent: list[str]
-        :return: list shaped `[BOS, BOS, state_0, ..., state_{T-1}]`
-                 where each state is a `(tag, capitalization)` pair.
+        :return: list shaped ``[BOS, BOS, state_0, ..., state_{T-1}]``
+                where each state is a ``(tag, capitalization)`` pair.
         """
-        # local bindings avoid repeated attribute lookups in the hot loop
+        if not sent:
+            return [_BOS, _BOS]
+
+        # Local bindings keep the hot loop on plain locals rather than
+        # repeated attribute lookups.
         word_tag_freqs = self._word_tag_freqs
         tag_bigrams = self._tag_bigrams
         tag_trigrams = self._tag_trigrams
         tag_unigrams = self._tag_unigrams
-        num_tag_tokens = self._num_tag_tokens
+        inv_num_tag_tokens = (
+            (1.0 / self._num_tag_tokens) if self._num_tag_tokens else 0.0
+        )
         lambda1, lambda2, lambda3 = self._lambda1, self._lambda2, self._lambda3
         log2_beam_threshold = self._log2_beam_threshold
         cap_on = self._use_capitalization
+        unk = self._unk
         cache = self._candidate_tags_cache
+        expand_states = self._expand_states
 
-        # Viterbi states per level. Each level maps (state_{i-1}, state_i)
-        # to (logp, backpointer_state_{i-2}).
+        # Each level keeps only the best path reaching a given
+        # ``(state_{i-1}, state_i)`` key. The backpointer stores
+        # ``state_{i-2}`` so the best path can be reconstructed at the end.
         states = {(_BOS, _BOS): (0.0, _BOS)}
         state_history = [states]
 
         for word in sent:
             c_i = cap_on and bool(word) and word[0].isupper()
             tag_freqs = word_tag_freqs.get(word)
+
             if tag_freqs is not None:
                 self.known += 1
             else:
                 self.unknown += 1
 
-            # External unk taggers may be stateful or context dependent,
-            # so we evaluate them on every call rather than memoizing.
-            # The known and suffix model paths are pure functions of
-            # `(word, c_i)` and the trained model state, so they cache.
-            if tag_freqs is None and self._unk is not None:
-                [(_w, t)] = self._unk.tag([word])
-                state_i = (t, c_i)
-                p_state_i = (
-                    (tag_unigrams[state_i] / num_tag_tokens) if num_tag_tokens else 0
-                )
+            # External unknown-word taggers are treated as potentially
+            # stateful. The built-in known-word and suffix-model paths are
+            # pure given ``(word, c_i)`` and the trained model, so they cache.
+            if tag_freqs is None and unk is not None:
+                [(_word, tag)] = unk.tag([word])
+                state_i = (tag, c_i)
+                p_state_i = tag_unigrams[state_i] * inv_num_tag_tokens
                 candidate_tags = ((state_i, p_state_i, 0.0),)
             else:
                 cache_key = (word, c_i)
                 candidate_tags = cache.get(cache_key)
+
                 if candidate_tags is None:
                     if tag_freqs is not None:
-                        # Per-tag constants depend only on the candidate tag.
+                        # Known words only consider tags actually seen with
+                        # that surface form. The lexical term is P(word | tag).
                         entries = []
-                        for t, tag_count in tag_freqs.items():
-                            state_i = (t, c_i)
+                        for tag, tag_count in tag_freqs.items():
+                            state_i = (tag, c_i)
                             unigram_state_i = tag_unigrams[state_i]
-                            p_state_i = (
-                                (unigram_state_i / num_tag_tokens)
-                                if num_tag_tokens
-                                else 0
-                            )
+                            p_state_i = unigram_state_i * inv_num_tag_tokens
                             entries.append(
                                 (
                                     state_i,
@@ -609,52 +653,45 @@ class TnT(TaggerI):
                             )
                         candidate_tags = tuple(entries)
                     else:
-                        # Score this unknown word against every candidate
-                        # tag using the Bayes-inverted suffix posterior.
-                        tag_scores = self._unknown_tag_scores(word)
-                        if not tag_scores:
-                            # Fall back to a literal "Unk" tag when there is
-                            # no prior to score against, for example when
-                            # the tagger has not been trained.
+                        # Unknown words use the suffix model as their lexical
+                        # score. Bayes inversion turns the suffix posterior into
+                        # the emission-like quantity used by the decoder.
+                        suffix_scores = self._unknown_tag_scores(word)
+
+                        if not suffix_scores:
+                            # An untrained tagger has no suffix priors, so the
+                            # only safe fallback is a literal ``Unk`` state.
                             state_i = ("Unk", c_i)
-                            p_state_i = (
-                                (tag_unigrams[state_i] / num_tag_tokens)
-                                if num_tag_tokens
-                                else 0
-                            )
+                            p_state_i = tag_unigrams[state_i] * inv_num_tag_tokens
                             candidate_tags = ((state_i, p_state_i, 0.0),)
                         else:
                             entries = []
-                            for t, score in tag_scores.items():
-                                state_i = (t, c_i)
-                                p_state_i = (
-                                    (tag_unigrams[state_i] / num_tag_tokens)
-                                    if num_tag_tokens
-                                    else 0
-                                )
-                                log_score = (
+                            for tag, score in suffix_scores.items():
+                                state_i = (tag, c_i)
+                                p_state_i = tag_unigrams[state_i] * inv_num_tag_tokens
+                                log_emit = (
                                     log2(score) if score > 1e-300 else _LOG_FLOOR_2
                                 )
-                                entries.append((state_i, p_state_i, log_score))
+                                entries.append((state_i, p_state_i, log_emit))
                             candidate_tags = tuple(entries)
+
                     cache[cache_key] = candidate_tags
 
-            new_states, best_logp = self._expand_states(states, candidate_tags)
+            new_states, best_logp = expand_states(states, candidate_tags)
 
-            # Threshold prune drops states worse than the best by more than log2(N).
+            # Threshold pruning keeps the beam relative to the best current
+            # path, which is the pruning rule described in the paper.
             cutoff = best_logp - log2_beam_threshold
-            new_states = {k: v for k, v in new_states.items() if v[0] >= cutoff}
-
-            states = new_states
+            states = {k: v for k, v in new_states.items() if v[0] >= cutoff}
             state_history.append(states)
 
-        # Score the EOS transition with the same deleted interpolation
-        # used for every other tag, then pick the best final state.
-        # `states` is non-empty by construction, so we seed with any
-        # key to avoid an Optional placeholder.
-        p_eos_unigram = (tag_unigrams[_EOS] / num_tag_tokens) if num_tag_tokens else 0
-        best_final_state = next(iter(states))
+        # EOS is scored by the same interpolated transition model as every
+        # other step. The best final key is the state pair that maximizes
+        # the complete sentence score including the boundary transition.
+        p_eos_unigram = tag_unigrams[_EOS] * inv_num_tag_tokens
+        best_final_key = next(iter(states))
         best_final_logp = float("-inf")
+
         for (state_i_minus_2, state_i_minus_1), (prefix_logp, _) in states.items():
             bigram_dist = tag_bigrams[state_i_minus_1]
             trigram_dist = tag_trigrams[(state_i_minus_2, state_i_minus_1)]
@@ -675,26 +712,23 @@ class TnT(TaggerI):
             final_logp = prefix_logp + eos_logp
             if final_logp > best_final_logp:
                 best_final_logp = final_logp
-                best_final_state = (state_i_minus_2, state_i_minus_1)
+                best_final_key = (state_i_minus_2, state_i_minus_1)
 
-        # Walk backpointers to reconstruct the best path,
-        # collecting states in reverse. At level L the key
-        # is (state_{L-2}, state_{L-1}) and the backpointer
-        # is state_{L-3}, peeling off one state per step.
+        # Walking the stored ``state_{i-2}`` backpointers recovers the best
+        # full state sequence from the best final state pair.
         T = len(sent)
-        if T == 0:
-            return [_BOS, _BOS]
-
-        tags_reversed = [best_final_state[1]]
+        states_reversed = [best_final_key[1]]
         if T >= 2:
-            tags_reversed.append(best_final_state[0])
-        current_state = best_final_state
+            states_reversed.append(best_final_key[0])
+
+        current_key = best_final_key
         for level in range(T, 2, -1):
-            backpointer = state_history[level][current_state][1]
-            tags_reversed.append(backpointer)
-            current_state = (backpointer, current_state[0])
-        tags_reversed.reverse()
-        return [_BOS, _BOS] + tags_reversed
+            backpointer = state_history[level][current_key][1]
+            states_reversed.append(backpointer)
+            current_key = (backpointer, current_key[0])
+
+        states_reversed.reverse()
+        return [_BOS, _BOS] + states_reversed
 
 
 ########################################

@@ -2,7 +2,7 @@
 #
 # Copyright (C) 2001-2026 NLTK Project
 # Author: Sam Huston <sjh900@gmail.com>
-# Major revisions: John Winstead <https://github.com/jhnwnstd>
+#         John Winstead <https://github.com/jhnwnstd>
 #
 # URL: <https://www.nltk.org/>
 # For license information, see LICENSE.TXT

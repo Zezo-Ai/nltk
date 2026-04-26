@@ -6,7 +6,15 @@ import math
 
 import pytest
 
-from nltk.tag.tnt import _BOS, _EOS, TnT, basic_sent_chop
+from nltk.tag.tnt import (
+    _BOS,
+    _EOS,
+    _LOG_FLOOR_2,
+    TnT,
+    _safe_inverse,
+    _safe_log2,
+    basic_sent_chop,
+)
 
 # Synthetic corpus covering the tag classes used below.
 _TRAIN = [
@@ -269,6 +277,26 @@ def test_unknown_word_falls_back_to_unk_when_priors_empty():
     assert t.tag(["xyzzy"]) == [("xyzzy", "Unk")]
 
 
+def test_external_unk_returning_unseen_tag_survives_decode():
+    """An external ``unk`` tagger may return a tag that was never seen
+    during training. The candidate state has no unigram entry, so the
+    transition cache falls through to the model floor; the path stays
+    alive and the tag appears in the decoder's output."""
+
+    class ConstantUnk:
+        def train(self, _data):
+            pass
+
+        def tag(self, toks):
+            return [(w, "NONESUCH") for w in toks]
+
+    t = TnT(unk=ConstantUnk())
+    t.train(_TRAIN)
+    [(word, tag)] = t.tag(["xyzzy"])
+    assert word == "xyzzy"
+    assert tag == "NONESUCH"
+
+
 # ---------------------------------------------------------------------
 # Lambdas
 # ---------------------------------------------------------------------
@@ -399,6 +427,80 @@ def test_unknown_word_decode_does_not_grow_suffix_trie(tagger):
         tagger.tag([word])
     after = set(trie.conditions())
     assert after == before
+
+
+def test_decode_does_not_grow_ngram_conditions(tagger):
+    """Tagging must not add conditions to ``_tag_bigrams`` or
+    ``_tag_trigrams``. ``ConditionalFreqDist`` subscript access creates
+    empty entries for unseen keys, which would silently mutate the
+    trained model and break the read-only-decode contract."""
+    before_bigrams = set(tagger._tag_bigrams.conditions())
+    before_trigrams = set(tagger._tag_trigrams.conditions())
+    tagger.tag(["xyzzy", "phlogiston", "doodad"])
+    assert set(tagger._tag_bigrams.conditions()) == before_bigrams
+    assert set(tagger._tag_trigrams.conditions()) == before_trigrams
+
+
+def test_transition_logp_cache_matches_direct_formula(tagger):
+    """The cached transition log-probabilities equal the direct
+    interpolated formula at every tier (trigram, bigram, unigram), and
+    completely unseen states fall through to ``_LOG_FLOOR_2``."""
+    l1, l2, l3 = tagger._lambda1, tagger._lambda2, tagger._lambda3
+    inv_total = _safe_inverse(tagger._num_tag_tokens)
+
+    def direct(prev2, prev1, current):
+        bigram_dist = tagger._tag_bigrams.get(prev1)
+        trigram_dist = tagger._tag_trigrams.get((prev2, prev1))
+        p = l1 * (tagger._tag_unigrams[current] * inv_total)
+        if bigram_dist is not None:
+            p += l2 * bigram_dist.get(current, 0) * _safe_inverse(bigram_dist.N())
+        if trigram_dist is not None:
+            p += l3 * trigram_dist.get(current, 0) * _safe_inverse(trigram_dist.N())
+        return _safe_log2(p)
+
+    def cached(prev2, prev1, current):
+        v = tagger._trans_logp_trigram.get((prev2, prev1), {}).get(current)
+        if v is not None:
+            return v
+        v = tagger._trans_logp_bigram.get(prev1, {}).get(current)
+        if v is not None:
+            return v
+        return tagger._trans_logp_unigram.get(current, _LOG_FLOOR_2)
+
+    # Case 1: observed trigram (cache hits at the trigram tier).
+    sampled_any = False
+    for prev_pair, dist in tagger._tag_trigrams.items():
+        prev2, prev1 = prev_pair
+        for current in dist:
+            assert cached(prev2, prev1, current) == direct(prev2, prev1, current)
+            sampled_any = True
+    assert sampled_any, "fixture should expose observed trigrams"
+
+    # Case 2: observed bigram with a fabricated prev2 that was never
+    # paired with prev1; cache falls through to the bigram tier.
+    bogus_prev2 = ("BOGUS_PREV2", False)
+    for prev1, dist in tagger._tag_bigrams.items():
+        if (bogus_prev2, prev1) in tagger._tag_trigrams:
+            continue
+        for current in dist:
+            assert cached(bogus_prev2, prev1, current) == direct(
+                bogus_prev2, prev1, current
+            )
+
+    # Case 3: observed unigram with fabricated history; cache falls
+    # through to the unigram tier.
+    bogus_prev1 = ("BOGUS_PREV1", False)
+    assert bogus_prev1 not in tagger._tag_bigrams.conditions()
+    for state in tagger._tag_unigrams:
+        assert cached(bogus_prev2, bogus_prev1, state) == direct(
+            bogus_prev2, bogus_prev1, state
+        )
+
+    # Case 4: completely unseen state. Cache returns the floor; the
+    # direct formula reaches the same floor since p collapses to 0.
+    bogus_state = ("NEVER_SEEN", False)
+    assert cached(bogus_prev2, bogus_prev1, bogus_state) == _LOG_FLOOR_2
+    assert direct(bogus_prev2, bogus_prev1, bogus_state) == _LOG_FLOOR_2
 
 
 # ---------------------------------------------------------------------

@@ -19,7 +19,8 @@ from math import log2
 from nltk.probability import ConditionalFreqDist, FreqDist
 from nltk.tag.api import TaggerI
 
-# Returned in place of log2(p) when p is zero; log2(1e-300) ~= -996.58.
+# Used in place of log2(p) when p underflows; log2(1e-300) ~= -996.58
+# is still well above the negative-inf result of log2(0).
 _LOG_FLOOR_2 = log2(1e-300)
 
 # Sentinel tags used at sentence boundaries.
@@ -28,6 +29,21 @@ _EOS = ("EOS", False)
 
 _SENT_MARKS = (".", "!", "?", ";")
 
+# Returned by transition-cache misses so inner-loop ``.get`` calls never
+# need an extra ``None`` check before the next lookup.
+_EMPTY_DICT = {}
+
+
+def _safe_log2(p):
+    """``log2(p)`` for a non-zero probability, ``_LOG_FLOOR_2`` otherwise."""
+    return log2(p) if p > 1e-300 else _LOG_FLOOR_2
+
+
+def _safe_inverse(n):
+    """``1/n`` for a non-zero ``n``, ``0.0`` otherwise so callers can use
+    multiplication without an inline guard."""
+    return (1.0 / n) if n else 0.0
+
 
 class TnT(TaggerI):
     """
@@ -35,62 +51,68 @@ class TnT(TaggerI):
 
     IMPORTANT NOTES:
 
-    * HANDLES UNSEEN WORDS VIA BRANTS' SUFFIX MODEL
+    * HANDLES UNSEEN WORDS VIA BRANTS'S SUFFIX MODEL
 
       - Unknown words are tagged using the suffix-based distribution
         described in Brants (2000) section 2.3, smoothed by successive
         abstraction and scored via Bayesian inversion.
       - An external POS tagger may still be supplied via the ``unk``
-        parameter to override the suffix model, see __init__ function.
+        parameter to override the suffix model; see the ``__init__`` function.
 
     * SHOULD BE USED WITH SENTENCE-DELIMITED INPUT
 
       - Due to the nature of this tagger, it works best when
-        trained over sentence delimited input.
-      - However it still produces good results if the training
-        data and testing data are separated on all punctuation eg: [,.?!]
-      - Input for training is expected to be a list of sentences
-        where each sentence is a list of (word, tag) tuples
-      - Input for tag function is a single sentence
-        Input for tagdata function is a list of sentences
-        Output is of a similar form
+        trained over sentence-delimited input.
+      - However, it still produces good results if the training
+        data and testing data are separated on sentence-final
+        punctuation, e.g., [.!?;]
+      - Input for training is expected to be a list of sentences,
+        where each sentence is a list of (word, tag) tuples.
+      - Input for the ``tag`` function is a single sentence.
+        Input for the ``tagdata`` function is a list of sentences.
+        Output is of a similar form.
 
     * Function provided to process text that is unsegmented
 
-      - Please see basic_sent_chop()
+      - Please see ``basic_sent_chop()``.
 
 
-    TnT uses a second order Markov model to produce tags for
-    a sequence of input, specifically:
+    TnT uses a second-order Markov model to score tag sequences. For
+    a sentence of length T, the decoder picks the tag sequence that
+    maximizes
 
-      argmax [Proj(P(t_i|t_i-1,t_i-2)P(w_i|t_i))] P(t_T+1 | t_T)
+      prod_i P(t_i | t_{i-1}, t_{i-2}) * P(w_i | t_i)
 
-    IE: the maximum projection of a set of probabilities
+    with an explicit boundary factor P(EOS | t_{T-1}, t_T) at the end.
+    Decoding runs Viterbi in log space over a trellis of
+    ``(t_{i-1}, t_i)`` state pairs:
 
-    The set of possible tags for a given word is derived
-    from the training data. It is the set of all tags
-    that exact word has been assigned.
+      argmax_{t_1..t_T} sum_i [ log P(t_i | t_{i-1}, t_{i-2})
+                              + log P(w_i | t_i) ]
+                      + log P(EOS | t_{T-1}, t_T)
 
-    To speed up and get more precision, we can use log addition
-    to instead multiplication, specifically:
+    The transition probability is a deleted interpolation of zero-,
+    first-, and second-order tag models:
 
-      argmax [Sigma(log(P(t_i|t_i-1,t_i-2))+log(P(w_i|t_i)))] +
-             log(P(t_T+1|t_T))
+      P(t_i | t_{i-1}, t_{i-2}) = l1 * P(t_i)
+                                + l2 * P(t_i | t_{i-1})
+                                + l3 * P(t_i | t_{i-1}, t_{i-2})
 
-    The probability of a tag for a given word is the linear
-    interpolation of 3 markov models; a zero-order, first-order,
-    and a second order model.
+    The weights l1, l2, l3 are estimated from the training data by
+    the procedure in Brants (2000) section 2.2.
 
-      P(t_i| t_i-1, t_i-2) = l1*P(t_i) + l2*P(t_i| t_i-1) +
-                             l3*P(t_i| t_i-1, t_i-2)
+    The emission probability P(w_i | t_i) for known words is the
+    relative frequency of (w_i, t_i) in the training lexicon. For
+    unknown words, it is the Bayes-inverted suffix score described in
+    section 2.3 (see HANDLES UNSEEN WORDS above). Candidate tags for
+    a known word are exactly the tags it was assigned in training.
 
-    A beam search is used to limit the memory usage of the algorithm.
-    The beam is controlled by a pruning threshold N after each step,
-    states whose probability is worse than the best
-    by more than a factor of N are discarded.
+    A beam search limits memory: after each step, states whose log
+    probability is worse than the best surviving state by more than
+    log2(N) are discarded.
 
-    It is possible to differentiate the tags which are assigned to
-    capitalized words. However this does not result in a significant
+    It is possible to differentiate the tags that are assigned to
+    capitalized words. However, this does not result in a significant
     gain in the accuracy of the results.
     """
 
@@ -149,6 +171,12 @@ class TnT(TaggerI):
         }
         self._tag_prior_probs = {}
         self._theta = 0.0
+
+        # Read by ``_expand_states`` instead of recomputing the deleted
+        # interpolation and ``log2`` per beam expansion.
+        self._trans_logp_unigram = {}
+        self._trans_logp_bigram = {}
+        self._trans_logp_trigram = {}
 
         self._unk = unk
 
@@ -221,25 +249,27 @@ class TnT(TaggerI):
         self._log2_beam_threshold = log2(self._beam_threshold)
 
         self._build_suffix_model()
+        self._build_transition_logp_cache()
 
         self._unk_trained = True
 
     def _build_suffix_model(self):
         """
-        Build the suffix-based language model TnT uses for unseen words.
-        Populates two capitalization-split suffix tries, the smoothing
-        weight `theta`, and a unigram tag prior. These are the three
-        pieces that `_unknown_tag_scores` reads at decode time.
+        Build the suffix model used for unseen words.
 
-        The priors exclude the EOS pseudo-tag (a sequence marker, not a
-        lexical tag) and sum across capitalization. Suffix statistics
-        come only from lexicon words with count of 10 or fewer, the
-        "infrequent words" threshold from Brants (2000) section 2.3,
-        on the reasoning that frequent words tell us little about what
-        unseen words might look like.
+        The model stores three decode-time values: capitalization-split
+        suffix tries, the successive-abstraction weight theta, and raw
+        tag priors collapsed across capitalization.
+
+        EOS is excluded from the priors because it is a sequence marker,
+        not a lexical tag. Suffix counts come only from lexicon words
+        with total count at most 10, following Brants's infrequent-word
+        threshold for unknown-word modeling.
         """
         tag_counts = {}
         for (tag, _), count in self._tag_unigrams.items():
+            # The suffix model predicts lexical tags, not boundary markers.
+            # Check the raw tag so EOS is excluded from all capitalization states.
             if tag == "EOS":
                 continue
             tag_counts[tag] = tag_counts.get(tag, 0) + count
@@ -274,6 +304,80 @@ class TnT(TaggerI):
                 suffix_dist = suffix_trie[word[-m:]]
                 for tag, count in tag_freqs.items():
                     suffix_dist[tag] += count
+
+    def _build_transition_logp_cache(self):
+        """
+        Precompute transition log probabilities for Viterbi expansion.
+
+        The decoder scores each transition with the same deleted
+        interpolation used by the model.
+
+            P(t_i | t_{i-2}, t_{i-1})
+              = l1 P(t_i)
+              + l2 P(t_i | t_{i-1})
+              + l3 P(t_i | t_{i-2}, t_{i-1})
+
+        Computing this value inside the beam loop repeats the same work
+        many times, so training builds caches for the observed unigram,
+        bigram, and trigram contexts. During decoding, ``_expand_states``
+        first tries the trigram cache, then the bigram cache, then the
+        unigram cache.
+
+        The caches store log2 probabilities.
+
+            ``_trans_logp_unigram[state]``
+            ``_trans_logp_bigram[prev1][state]``
+            ``_trans_logp_trigram[(prev2, prev1)][state]``
+
+        Bigram cache entries include the unigram and bigram interpolation
+        terms. Trigram cache entries include all three terms. The
+        parenthesization in the probability calculation is kept stable so
+        cached values match the previous per-call computation.
+        """
+        tag_unigrams = self._tag_unigrams
+        tag_bigrams = self._tag_bigrams
+        tag_trigrams = self._tag_trigrams
+        inv_total_N = _safe_inverse(self._num_tag_tokens)
+        lambda1, lambda2, lambda3 = self._lambda1, self._lambda2, self._lambda3
+
+        # Computed once and reused below so the bigram and trigram caches
+        # don't recompute the unigram contribution per (history, current).
+        unigram_part = {
+            state: lambda1 * (count * inv_total_N)
+            for state, count in tag_unigrams.items()
+        }
+        self._trans_logp_unigram = {
+            state: _safe_log2(p) for state, p in unigram_part.items()
+        }
+
+        bigram_logp = {}
+        for prev1 in tag_bigrams.conditions():
+            bigram_dist = tag_bigrams[prev1]
+            inv_bigram_N = _safe_inverse(bigram_dist.N())
+            bigram_logp[prev1] = {
+                current: _safe_log2(
+                    unigram_part.get(current, 0.0) + lambda2 * count * inv_bigram_N
+                )
+                for current, count in bigram_dist.items()
+            }
+        self._trans_logp_bigram = bigram_logp
+
+        trigram_logp = {}
+        for prev_pair in tag_trigrams.conditions():
+            trigram_dist = tag_trigrams[prev_pair]
+            inv_trigram_N = _safe_inverse(trigram_dist.N())
+            bigram_dist = tag_bigrams[prev_pair[1]]
+            inv_bigram_N = _safe_inverse(bigram_dist.N())
+            bigram_get = bigram_dist.get
+            trigram_logp[prev_pair] = {
+                current: _safe_log2(
+                    unigram_part.get(current, 0.0)
+                    + lambda2 * bigram_get(current, 0) * inv_bigram_N
+                    + lambda3 * count * inv_trigram_N
+                )
+                for current, count in trigram_dist.items()
+            }
+        self._trans_logp_trigram = trigram_logp
 
     def _compute_lambda(self):
         """
@@ -453,10 +557,10 @@ class TnT(TaggerI):
         after this point depends only on the last two states, so the
         discarded path can never beat the kept one.
 
-        `candidate_tags` is a sequence of `(state_i, p_state_i,
-        log_emit)` triples. Transitions use the same deleted
-        interpolation as on the known-word path, floored before log2
-        to avoid blowing up on an all-zero context.
+        `candidate_tags` is a sequence of `(state_i, log_emit)` pairs.
+        `log_emit` is the lexical log-probability for known words, the
+        Bayes-inverted suffix score for unknown words, or zero for an
+        external unknown-word tagger.
 
         :return: ``(new_states, best_logp)``. ``new_states`` maps
                  `(state_i_minus_1, state_i)` to
@@ -466,30 +570,33 @@ class TnT(TaggerI):
                  `logp` across `new_states`, returned so the caller
                  can apply threshold pruning without a second pass.
         """
-        lambda1, lambda2, lambda3 = self._lambda1, self._lambda2, self._lambda3
-        tag_bigrams = self._tag_bigrams
-        tag_trigrams = self._tag_trigrams
+        trans_logp_trigram = self._trans_logp_trigram
+        trans_logp_bigram = self._trans_logp_bigram
+        unigram_logp_get = self._trans_logp_unigram.get
         new_states = {}
         best_logp = float("-inf")
-        for (state_i_minus_2, state_i_minus_1), (prefix_logp, _) in states.items():
-            bigram_dist = tag_bigrams[state_i_minus_1]
-            trigram_dist = tag_trigrams[(state_i_minus_2, state_i_minus_1)]
-            bigram_N = bigram_dist.N()
-            trigram_N = trigram_dist.N()
-            inv_bigram_N = (1.0 / bigram_N) if bigram_N else 0.0
-            inv_trigram_N = (1.0 / trigram_N) if trigram_N else 0.0
-            for state_i, p_state_i, log_emit in candidate_tags:
-                p_state_i_given_history = (
-                    lambda1 * p_state_i
-                    + lambda2 * bigram_dist[state_i] * inv_bigram_N
-                    + lambda3 * trigram_dist[state_i] * inv_trigram_N
-                )
-                step_logp = (
-                    log2(p_state_i_given_history)
-                    if p_state_i_given_history > 1e-300
-                    else _LOG_FLOOR_2
-                ) + log_emit
-                path_logp = prefix_logp + step_logp
+        for predecessor_key, (prefix_logp, _) in states.items():
+            state_i_minus_2, state_i_minus_1 = predecessor_key
+            # Per-history caches are constant across the candidate loop;
+            # resolving them once and using ``_EMPTY_DICT`` for misses
+            # lets the inner ``.get`` calls run without ``None`` branches.
+            trigram_logp = trans_logp_trigram.get(predecessor_key, _EMPTY_DICT)
+            bigram_logp = trans_logp_bigram.get(state_i_minus_1, _EMPTY_DICT)
+            trigram_logp_get = trigram_logp.get
+            bigram_logp_get = bigram_logp.get
+            for state_i, log_emit in candidate_tags:
+                trans_logp = trigram_logp_get(state_i)
+                if trans_logp is None:
+                    trans_logp = bigram_logp_get(state_i)
+                    if trans_logp is None:
+                        # If the candidate state was never observed as a
+                        # unigram, keep the path alive with the model floor.
+                        # This is smoothing for unseen states, not only
+                        # protection around log2(0).
+                        trans_logp = unigram_logp_get(state_i, _LOG_FLOOR_2)
+                # Parens match the previous ``step_logp + prefix_logp``
+                # order so the sum is bit-identical to the old decoder.
+                path_logp = prefix_logp + (trans_logp + log_emit)
                 if path_logp > best_logp:
                     best_logp = path_logp
                 next_state = (state_i_minus_1, state_i)
@@ -595,13 +702,8 @@ class TnT(TaggerI):
         # Local bindings keep the hot loop on plain locals rather than
         # repeated attribute lookups.
         word_tag_freqs = self._word_tag_freqs
-        tag_bigrams = self._tag_bigrams
-        tag_trigrams = self._tag_trigrams
         tag_unigrams = self._tag_unigrams
-        inv_num_tag_tokens = (
-            (1.0 / self._num_tag_tokens) if self._num_tag_tokens else 0.0
-        )
-        lambda1, lambda2, lambda3 = self._lambda1, self._lambda2, self._lambda3
+        inv_num_tag_tokens = _safe_inverse(self._num_tag_tokens)
         log2_beam_threshold = self._log2_beam_threshold
         cap_on = self._use_capitalization
         unk = self._unk
@@ -628,9 +730,7 @@ class TnT(TaggerI):
             # pure given ``(word, c_i)`` and the trained model, so they cache.
             if tag_freqs is None and unk is not None:
                 [(_word, tag)] = unk.tag([word])
-                state_i = (tag, c_i)
-                p_state_i = tag_unigrams[state_i] * inv_num_tag_tokens
-                candidate_tags = ((state_i, p_state_i, 0.0),)
+                candidate_tags = (((tag, c_i), 0.0),)
             else:
                 cache_key = (word, c_i)
                 candidate_tags = cache.get(cache_key)
@@ -643,14 +743,7 @@ class TnT(TaggerI):
                         for tag, tag_count in tag_freqs.items():
                             state_i = (tag, c_i)
                             unigram_state_i = tag_unigrams[state_i]
-                            p_state_i = unigram_state_i * inv_num_tag_tokens
-                            entries.append(
-                                (
-                                    state_i,
-                                    p_state_i,
-                                    log2(tag_count / unigram_state_i),
-                                )
-                            )
+                            entries.append((state_i, log2(tag_count / unigram_state_i)))
                         candidate_tags = tuple(entries)
                     else:
                         # Unknown words use the suffix model as their lexical
@@ -661,19 +754,12 @@ class TnT(TaggerI):
                         if not suffix_scores:
                             # An untrained tagger has no suffix priors, so the
                             # only safe fallback is a literal ``Unk`` state.
-                            state_i = ("Unk", c_i)
-                            p_state_i = tag_unigrams[state_i] * inv_num_tag_tokens
-                            candidate_tags = ((state_i, p_state_i, 0.0),)
+                            candidate_tags = ((("Unk", c_i), 0.0),)
                         else:
-                            entries = []
-                            for tag, score in suffix_scores.items():
-                                state_i = (tag, c_i)
-                                p_state_i = tag_unigrams[state_i] * inv_num_tag_tokens
-                                log_emit = (
-                                    log2(score) if score > 1e-300 else _LOG_FLOOR_2
-                                )
-                                entries.append((state_i, p_state_i, log_emit))
-                            candidate_tags = tuple(entries)
+                            candidate_tags = tuple(
+                                ((tag, c_i), _safe_log2(score))
+                                for tag, score in suffix_scores.items()
+                            )
 
                     cache[cache_key] = candidate_tags
 
@@ -685,34 +771,45 @@ class TnT(TaggerI):
             states = {k: v for k, v in new_states.items() if v[0] >= cutoff}
             state_history.append(states)
 
-        # EOS is scored by the same interpolated transition model as every
-        # other step. The best final key is the state pair that maximizes
-        # the complete sentence score including the boundary transition.
+        # Scored inline rather than via the transition cache to preserve
+        # the previous decoder's floating-point evaluation order; per-call
+        # cost is small relative to the inner Viterbi loop.
+        tag_bigrams = self._tag_bigrams
+        tag_trigrams = self._tag_trigrams
+        lambda1, lambda2, lambda3 = self._lambda1, self._lambda2, self._lambda3
         p_eos_unigram = tag_unigrams[_EOS] * inv_num_tag_tokens
         best_final_key = next(iter(states))
         best_final_logp = float("-inf")
 
-        for (state_i_minus_2, state_i_minus_1), (prefix_logp, _) in states.items():
-            bigram_dist = tag_bigrams[state_i_minus_1]
-            trigram_dist = tag_trigrams[(state_i_minus_2, state_i_minus_1)]
-            bigram_N = bigram_dist.N()
-            trigram_N = trigram_dist.N()
-            p_eos_bigram = (bigram_dist[_EOS] / bigram_N) if bigram_N else 0
-            p_eos_trigram = (trigram_dist[_EOS] / trigram_N) if trigram_N else 0
+        for predecessor_key, (prefix_logp, _) in states.items():
+            state_i_minus_1 = predecessor_key[1]
+
+            # ``ConditionalFreqDist.__getitem__`` would create empty entries
+            # for unseen keys, mutating the trained model during decode. Use
+            # ``.get`` so an unseen history just contributes zero.
+            bigram_dist = tag_bigrams.get(state_i_minus_1)
+            if bigram_dist is None:
+                p_eos_bigram = 0.0
+            else:
+                bigram_N = bigram_dist.N()
+                p_eos_bigram = (bigram_dist[_EOS] / bigram_N) if bigram_N else 0.0
+
+            trigram_dist = tag_trigrams.get(predecessor_key)
+            if trigram_dist is None:
+                p_eos_trigram = 0.0
+            else:
+                trigram_N = trigram_dist.N()
+                p_eos_trigram = (trigram_dist[_EOS] / trigram_N) if trigram_N else 0.0
+
             p_eos_given_history = (
                 lambda1 * p_eos_unigram
                 + lambda2 * p_eos_bigram
                 + lambda3 * p_eos_trigram
             )
-            eos_logp = (
-                log2(p_eos_given_history)
-                if p_eos_given_history > 1e-300
-                else _LOG_FLOOR_2
-            )
-            final_logp = prefix_logp + eos_logp
+            final_logp = prefix_logp + _safe_log2(p_eos_given_history)
             if final_logp > best_final_logp:
                 best_final_logp = final_logp
-                best_final_key = (state_i_minus_2, state_i_minus_1)
+                best_final_key = predecessor_key
 
         # Walking the stored ``state_{i-2}`` backpointers recovers the best
         # full state sequence from the best final state pair.
@@ -823,7 +920,6 @@ def demo2():
         print("Accuracy:", tacc)
         print("Percentage known:", tp_kn)
         print("Percentage unknown:", tp_un)
-        print("Accuracy over known words:", (tacc / tp_kn))
 
         sacc = s.accuracy(d[i * 100 : ((i + 1) * 100)])
         sp_un = s.unknown / (s.known + s.unknown)
@@ -835,7 +931,6 @@ def demo2():
         print("Accuracy:", sacc)
         print("Percentage known:", sp_kn)
         print("Percentage unknown:", sp_un)
-        print("Accuracy over known words:", (sacc / sp_kn))
 
 
 def demo3():
@@ -850,8 +945,6 @@ def demo3():
     d10 = int(len(d) * 0.1)
     e10 = int(len(e) * 0.1)
 
-    tknacc = 0
-    sknacc = 0
     tallacc = 0
     sallacc = 0
     tknown = 0
@@ -884,14 +977,10 @@ def demo3():
         s.unknown = 0
         s.known = 0
 
-        tknacc += tacc / tp_kn
-        sknacc += sacc / sp_kn
         tallacc += tacc
         sallacc += sacc
 
-    print("brown: acc over words known:", 10 * tknacc)
-    print("     : overall accuracy:", 10 * tallacc)
-    print("     : words known:", 10 * tknown)
-    print("treebank: acc over words known:", 10 * sknacc)
-    print("        : overall accuracy:", 10 * sallacc)
+    print("brown   : overall accuracy:", 10 * tallacc)
+    print("        : words known:", 10 * tknown)
+    print("treebank: overall accuracy:", 10 * sallacc)
     print("        : words known:", 10 * sknown)

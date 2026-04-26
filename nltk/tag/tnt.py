@@ -132,7 +132,7 @@ class TnT(TaggerI):
         :param N: Beam search pruning threshold. After each Viterbi
                 step any state whose log-probability is worse than
                 the best by more than a factor of N is discarded.
-                1000 is a good default.
+                Must be a positive integer; 1000 is a good default.
         :type  N: int
         :param C: Capitalization flag. When True, tags are differentiated
                 by whether the source word is capitalized. This rarely
@@ -140,14 +140,11 @@ class TnT(TaggerI):
         :type  C: bool
         """
 
-        # Beam thresholding uses log2(N), so N must be finite and at least 1.
-        # The explicit bool check matters because bool is a subclass of int.
-        if (
-            isinstance(N, bool)
-            or not isinstance(N, (int, float))
-            or not (1 <= N < float("inf"))
-        ):
-            raise ValueError(f"N must be a finite number >= 1, got {N!r}")
+        # Restricting N to a positive integer keeps the public contract
+        # narrow. The explicit bool check matters because ``bool`` is a
+        # subclass of ``int`` and would otherwise pass the type check.
+        if isinstance(N, bool) or not isinstance(N, int) or N < 1:
+            raise ValueError(f"N must be a positive integer, got {N!r}")
 
         self._tag_unigrams = FreqDist()
         self._tag_bigrams = ConditionalFreqDist()
@@ -497,15 +494,18 @@ class TnT(TaggerI):
         if longest == 0:
             return {tag: 1.0 for tag, prior in tag_priors.items() if prior > 0}
 
-        # With theta equal to zero there is no smoothing, so the estimate is
-        # just the empirical distribution of the longest matched suffix.
+        # With theta equal to zero there is no smoothing, so the estimate
+        # is the empirical distribution of the longest matched suffix.
+        # Tags absent from that bucket would have score zero, so they are
+        # dropped from the result instead of being emitted as floor-only
+        # candidates that the beam would prune anyway.
         if theta == 0.0:
             suffix_dist = suffix_trie[word[-longest:]]
             inv_suffix_N = 1.0 / suffix_dist.N()
             return {
-                tag: (suffix_dist[tag] * inv_suffix_N) / prior
-                for tag, prior in tag_priors.items()
-                if prior > 0
+                tag: (count * inv_suffix_N) / tag_priors[tag]
+                for tag, count in suffix_dist.items()
+                if tag_priors.get(tag, 0) > 0
             }
 
         # Dense successive abstraction updates every tag at every suffix

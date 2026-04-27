@@ -313,6 +313,7 @@
 - scruge1 <https://github.com/scruge1>
 - Ryan Mannion <https://github.com/ryanamannion>
 - Peter Pollak <https://github.com/Syzygy2048/>
+- Bradley Erickson <https://github.com/13rac1>
 
 ## Others whose work we've taken and included in NLTK, but who didn't directly contribute it:
 

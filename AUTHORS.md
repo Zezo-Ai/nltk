@@ -314,6 +314,7 @@
 - Ryan Mannion <https://github.com/ryanamannion>
 - Peter Pollak <https://github.com/Syzygy2048/>
 - Bradley Erickson <https://github.com/13rac1>
+- Volodymyr Matsko <https://github.com/Lemm1>
 
 ## Others whose work we've taken and included in NLTK, but who didn't directly contribute it:
 

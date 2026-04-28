@@ -6,9 +6,11 @@ The HF dataset viewer shows each language as a separate tab.
 Usage:
     python push_stopwords.py <hf_token>
 """
+
 import os
-import sys
 import shutil
+import sys
+
 import pandas as pd
 from huggingface_hub import HfApi
 
@@ -16,17 +18,39 @@ REPO_ID = "nltk-data-hub/stopwords"
 
 # BCP-47 codes for NLTK language names
 LANG_CODES = {
-    "albanian": "sq", "arabic": "ar", "azerbaijani": "az",
-    "basque": "eu", "belarusian": "be", "bengali": "bn",
-    "catalan": "ca", "chinese": "zh", "danish": "da",
-    "dutch": "nl", "english": "en", "finnish": "fi",
-    "french": "fr", "german": "de", "greek": "el",
-    "hebrew": "he", "hinglish": "hi", "hungarian": "hu",
-    "indonesian": "id", "italian": "it", "kazakh": "kk",
-    "nepali": "ne", "norwegian": "no", "portuguese": "pt",
-    "romanian": "ro", "russian": "ru", "slovene": "sl",
-    "spanish": "es", "swedish": "sv", "tajik": "tg",
-    "tamil": "ta", "turkish": "tr", "uzbek": "uz",
+    "albanian": "sq",
+    "arabic": "ar",
+    "azerbaijani": "az",
+    "basque": "eu",
+    "belarusian": "be",
+    "bengali": "bn",
+    "catalan": "ca",
+    "chinese": "zh",
+    "danish": "da",
+    "dutch": "nl",
+    "english": "en",
+    "finnish": "fi",
+    "french": "fr",
+    "german": "de",
+    "greek": "el",
+    "hebrew": "he",
+    "hinglish": "hi",
+    "hungarian": "hu",
+    "indonesian": "id",
+    "italian": "it",
+    "kazakh": "kk",
+    "nepali": "ne",
+    "norwegian": "no",
+    "portuguese": "pt",
+    "romanian": "ro",
+    "russian": "ru",
+    "slovene": "sl",
+    "spanish": "es",
+    "swedish": "sv",
+    "tajik": "tg",
+    "tamil": "ta",
+    "turkish": "tr",
+    "uzbek": "uz",
 }
 
 README_TEMPLATE = """\
@@ -124,14 +148,13 @@ def build_readme(langs, counts):
     )
 
     lang_stats = "\n".join(
-        f"| {lang} | {LANG_CODES.get(lang, '?')} | {counts[lang]:,} |"
-        for lang in langs
+        f"| {lang} | {LANG_CODES.get(lang, '?')} | {counts[lang]:,} |" for lang in langs
     )
 
     lang_list_repr = repr(langs)
 
-    return (README_TEMPLATE
-        .replace("{lang_yaml}", lang_yaml)
+    return (
+        README_TEMPLATE.replace("{lang_yaml}", lang_yaml)
         .replace("{configs_yaml}", configs_yaml)
         .replace("{n_langs}", str(len(langs)))
         .replace("{lang_list_repr}", lang_list_repr)

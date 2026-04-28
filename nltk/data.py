@@ -705,6 +705,7 @@ def find(resource_name, paths=None):
     # Uses local_files_only=True so no network request is made here.
     try:
         from nltk.huggingface.dataset import REGISTRY, HFDatasetPathPointer, _is_cached
+
         if resource_zipname in REGISTRY and _is_cached(resource_zipname):
             return HFDatasetPathPointer(resource_zipname)
     except ImportError:

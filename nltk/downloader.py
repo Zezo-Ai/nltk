@@ -845,6 +845,7 @@ class Downloader:
         # Delegate to HuggingFace downloader when hf=True.
         if hf and info_or_id is not None:
             from nltk.huggingface.dataset import download as hf_download
+
             return hf_download(info_or_id, quiet=quiet)
 
         print_to = functools.partial(print, file=print_error_to)

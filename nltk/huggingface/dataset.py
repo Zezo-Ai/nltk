@@ -91,6 +91,7 @@ REGISTRY = {
 # Cache detection (no network)
 # ---------------------------------------------------------------------------
 
+
 def _is_cached(corpus_id):
     """Return True if the corpus parquet exists in the local HF datasets cache."""
     info = REGISTRY.get(corpus_id)
@@ -98,6 +99,7 @@ def _is_cached(corpus_id):
         return False
     try:
         from huggingface_hub import try_to_load_from_cache
+
         result = try_to_load_from_cache(
             repo_id=info["repo"],
             filename=info["cache_probe"],
@@ -111,6 +113,7 @@ def _is_cached(corpus_id):
 # ---------------------------------------------------------------------------
 # Content serialisation
 # ---------------------------------------------------------------------------
+
 
 def _serialise(ds, info, fileid=None):
     """
@@ -173,6 +176,7 @@ def _load_hf_dataset(info, fileid=None):
 # HFDatasetPathPointer
 # ---------------------------------------------------------------------------
 
+
 class HFDatasetPathPointer:
     """
     A ``PathPointer``-compatible object backed by a HuggingFace dataset
@@ -215,9 +219,11 @@ class HFDatasetPathPointer:
         try:
             if structure == "multi_config":
                 from datasets import get_dataset_config_names
+
                 return sorted(get_dataset_config_names(info["repo"]))
             if structure == "flat":
                 from datasets import load_dataset
+
                 ds = load_dataset(info["repo"], split=info["split"])
                 return sorted(ds.unique(info["fileid_column"]))
             return [info["split"]]  # single
@@ -242,9 +248,11 @@ class HFDatasetPathPointer:
 def _register_path_pointer():
     try:
         from nltk.data import PathPointer
+
         PathPointer.register(HFDatasetPathPointer)
     except Exception:
         pass
+
 
 _register_path_pointer()
 
@@ -252,6 +260,7 @@ _register_path_pointer()
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
 
 def download(corpus_id, token=None, quiet=False):
     """
@@ -277,6 +286,7 @@ def download(corpus_id, token=None, quiet=False):
 
     if structure == "multi_config":
         from datasets import get_dataset_config_names
+
         configs = get_dataset_config_names(info["repo"])
         result = {
             cfg: load_dataset(info["repo"], cfg, split=info["split"], **kwargs)
@@ -284,15 +294,19 @@ def download(corpus_id, token=None, quiet=False):
         }
         if not quiet:
             total = sum(len(d) for d in result.values())
-            print(f"[nltk_hf] '{corpus_id}' downloaded from {info['repo']} "
-                  f"({len(configs)} configs, {total:,} rows)")
+            print(
+                f"[nltk_hf] '{corpus_id}' downloaded from {info['repo']} "
+                f"({len(configs)} configs, {total:,} rows)"
+            )
         return result
 
     else:  # flat or single
         ds = load_dataset(info["repo"], split=info["split"], **kwargs)
         if not quiet:
-            print(f"[nltk_hf] '{corpus_id}' downloaded from {info['repo']} "
-                  f"({len(ds):,} rows)")
+            print(
+                f"[nltk_hf] '{corpus_id}' downloaded from {info['repo']} "
+                f"({len(ds):,} rows)"
+            )
         return ds
 
 

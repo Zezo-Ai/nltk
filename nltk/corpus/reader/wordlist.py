@@ -20,6 +20,7 @@ class WordListCorpusReader(CorpusReader):
     def words(self, fileids=None, ignore_lines_startswith="\n", hf=False):
         if hf:
             from nltk.huggingface.dataset import load_data
+
             corpus_id = (
                 self._root.corpus_id
                 if hasattr(self._root, "corpus_id")
@@ -27,7 +28,8 @@ class WordListCorpusReader(CorpusReader):
             )
             content = load_data(corpus_id, fileid=fileids)
             return [
-                line for line in content.splitlines()
+                line
+                for line in content.splitlines()
                 if line and not line.startswith(ignore_lines_startswith)
             ]
         return [

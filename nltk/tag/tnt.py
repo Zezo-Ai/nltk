@@ -47,103 +47,90 @@ def _safe_inverse(n):
 
 class TnT(TaggerI):
     """
-    TnT statistical POS tagger.
+    TnT statistical part of speech tagger.
 
-    TnT implements the second order hidden Markov model tagger described
-    by Brants (2000). Hidden states are part of speech tags, observed
-    symbols are word tokens, and each tag transition depends on the two
-    previous tag states.
+    This class implements the Trigrams'n'Tags tagger described by
+    Brants (2000). TnT is a second order hidden Markov model. Its
+    hidden states are part of speech tags, its observations are word
+    tokens, and each transition is conditioned on the two previous tag
+    states.
 
-    Important usage notes
+    Input
 
-    * Use sentence delimited input.
+    TnT estimates and scores sentence boundary transitions, so training
+    and tagging data should normally be sentence delimited.
 
-      TnT estimates and scores beginning of sentence and end of sentence
-      transitions. It works best when training and tagging data are already
-      split into sentences.
+    Training data should be a list of tagged sentences. Each sentence
+    should be a list of ``(word, tag)`` tuples.
 
-      Training input should be a list of sentences. Each sentence should
-      be a list of ``(word, tag)`` tuples.
+    ``tag()`` expects one tokenized sentence.
+    ``tagdata()`` expects a list of tokenized sentences.
 
-      ``tag()`` expects one tokenized sentence.
-      ``tagdata()`` expects a list of tokenized sentences.
-
-      For simple punctuation based segmentation of token streams, see
-      ``basic_sent_chop()``. It splits on the sentence final punctuation
-      used by Brants, namely ``.``, ``!``, ``?``, and ``;``.
-
-    * Unknown words use Brants's suffix model.
-
-      Words not observed during training are scored from suffix
-      distributions, as described in Brants (2000), section 2.3. The model
-      builds capitalization specific suffix tries from infrequent training
-      words, smooths suffix tag probabilities by successive abstraction,
-      and applies Bayesian inversion to obtain emission like scores.
-
-      A user supplied tagger may be passed with ``unk``. When supplied,
-      it overrides the built in suffix model for unknown words.
-
-    * Known words use a tag dictionary.
-
-      For a known word, candidate tags are restricted to the tags assigned
-      to that word in the training data. If a word was never seen with a
-      tag during training, that tag is not considered for that word at
-      decode time.
+    For simple punctuation based segmentation of token streams, use
+    ``basic_sent_chop()`` or pass ``segment=True`` to ``tag()``. The
+    punctuation tokens are ``.``, ``!``, ``?``, and ``;``, following
+    Brants's sentence boundary heuristic.
 
     Model
 
-      For a sentence of length ``T``, the decoder chooses the tag sequence
-      that maximizes
+    For a sentence of length ``T``, the decoder chooses the tag sequence
+    that maximizes
 
-          prod_i P(t_i | t_{i-1}, t_{i-2}) * P(w_i | t_i)
+        prod_i P(t_i | t_{i-1}, t_{i-2}) * P(w_i | t_i)
 
-      and then scores an explicit end of sentence transition
+    and then scores an explicit end of sentence transition. EOS is
+    recorded as an ordinary next state in the trained n-gram stream,
+    so its factor uses the same deleted interpolation as the body
+    transitions (unigram, bigram, and trigram tiers). This generalizes
+    Brants's printed factor ``P(t_{T+1} | t_T)``, which is bigram only.
 
-          P(EOS | t_{T-1}, t_T)
-
-      Decoding uses Viterbi search in log space over a trellis of
-      ``(t_{i-1}, t_i)`` state pairs.
-
-          argmax_{t_1..t_T} sum_i [
-              log P(t_i | t_{i-1}, t_{i-2})
-              + log P(w_i | t_i)
-          ] + log P(EOS | t_{T-1}, t_T)
+    Decoding runs in log space over a Viterbi trellis whose state is
+    the pair ``(t_{i-1}, t_i)``.
 
     Transition smoothing
 
-      The transition probability is a deleted interpolation of unigram,
-      bigram, and trigram tag models.
+    Transition probabilities use context independent deleted
+    interpolation of unigram, bigram, and trigram tag models.
 
-          P(t_i | t_{i-1}, t_{i-2})
-              = l1 * P(t_i)
-              + l2 * P(t_i | t_{i-1})
-              + l3 * P(t_i | t_{i-1}, t_{i-2})
+        P(t_i | t_{i-1}, t_{i-2})
+            = l1 * P(t_i)
+            + l2 * P(t_i | t_{i-1})
+            + l3 * P(t_i | t_{i-1}, t_{i-2})
 
-      The interpolation weights ``l1``, ``l2``, and ``l3`` are estimated
-      from the training data with the deleted interpolation procedure in
-      Brants (2000), section 2.2.
+    The interpolation weights ``l1``, ``l2``, and ``l3`` are estimated
+    from the training counts by the deleted interpolation procedure in
+    Brants (2000), section 2.2.
 
     Emissions
 
-      For known words, ``P(w_i | t_i)`` is the relative frequency of the
-      word and tag pair in the training lexicon.
+    Known words use a tag dictionary. For a known word, candidate tags
+    are restricted to the tags assigned to that word in the training
+    data. The emission probability is the relative frequency of the
+    word and tag pair in the training lexicon.
 
-      For unknown words, the emission like score is the Bayes inverted
-      suffix score described above.
+    Unknown words use Brants's suffix model by default. The model builds
+    capitalization specific suffix tries from infrequent training words,
+    using the threshold of at most 10 occurrences from Brants (2000),
+    section 2.3. At decode time it uses the longest suffix observed in
+    training, capped at 10 characters, smooths the suffix tag
+    distribution by successive abstraction, and applies Bayesian
+    inversion to obtain emission like scores.
+
+    A user supplied tagger may be passed with ``unk``. When supplied,
+    it overrides the built in suffix model for unknown words.
 
     Beam search
 
-      The decoder uses beam pruning to limit memory and runtime. After
-      each Viterbi step, states whose log probability is worse than the
-      current best state by more than ``log2(N)`` are discarded. The
-      default threshold ``N=1000`` follows the value reported by Brants.
+    The decoder uses beam pruning to limit memory and runtime. After
+    each Viterbi step, states whose log probability is worse than the
+    current best state by more than ``log2(N)`` are discarded. The
+    default threshold ``N=1000`` follows Brants (2000), section 2.5.
 
     Capitalization
 
-      When ``C=True``, capitalization is included in the tag state. This
-      is equivalent to using separate tag states for capitalized and
-      uncapitalized tokens. It can help when capitalization is informative,
-      but its effect depends on the language, corpus, and tagset.
+    When ``C=True``, capitalization is included in the tag state. This
+    is equivalent to splitting each tag into capitalized and
+    uncapitalized variants, as described by Brants (2000), section 2.4.
     """
 
     def __init__(self, unk=None, Trained=False, N=1000, C=False):
@@ -683,7 +670,9 @@ class TnT(TaggerI):
         external ``unk`` tagger or by the suffix model. After each word, the
         beam keeps only states whose score is within ``log2(N)`` of the best
         surviving path. The decode then scores an explicit EOS transition
-        and walks backpointers to recover the best state sequence.
+        using deleted interpolation over the unigram, bigram, and trigram
+        EOS counts, and walks backpointers to recover the best state
+        sequence.
 
         :param sent: words to tag
         :type sent: list[str]

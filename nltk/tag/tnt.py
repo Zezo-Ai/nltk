@@ -31,7 +31,7 @@ _SENT_MARKS = (".", "!", "?", ";")
 
 # Returned by transition-cache misses so inner-loop ``.get`` calls never
 # need an extra ``None`` check before the next lookup.
-_EMPTY_DICT = {}
+_EMPTY_DICT: dict = {}
 
 
 def _safe_log2(p):
@@ -494,7 +494,7 @@ class TnT(TaggerI):
         tag_unigrams = self._tag_unigrams
         word_tag_freqs = self._word_tag_freqs
 
-        tag_counts = {}
+        tag_counts: dict = {}
         for (tag, _), count in tag_unigrams.items():
             # The suffix model predicts lexical tags, not boundary markers.
             # Check the raw tag so EOS is excluded from all capitalization states.
@@ -614,7 +614,7 @@ class TnT(TaggerI):
         miss_scale = theta / denom
 
         global_scale = 1.0
-        delta = {}
+        delta: dict = {}
 
         for i in range(1, longest + 1):
             suffix_dist = suffix_trie[word[-i:]]
@@ -652,8 +652,8 @@ class TnT(TaggerI):
         closes, and a trailing fragment without sentence-final punctuation
         is still tagged as its own segment.
         """
-        tagged = []
-        segment = []
+        tagged: list = []
+        segment: list = []
 
         sent_marks = _SENT_MARKS
         tagword = self._tagword
@@ -713,6 +713,7 @@ class TnT(TaggerI):
         states = {(_BOS, _BOS): (0.0, _BOS)}
         state_history = [states]
 
+        candidate_tags: tuple
         for word in sent:
             c_i = cap_on and bool(word) and word[0].isupper()
             tag_freqs = word_tag_freqs.get(word)
@@ -741,9 +742,9 @@ class TnT(TaggerI):
                 candidate_tags = ((state_i, 0.0, unigram_logp),)
             else:
                 cache_key = (word, c_i)
-                candidate_tags = cache.get(cache_key)
+                cached = cache.get(cache_key)
 
-                if candidate_tags is None:
+                if cached is None:
                     if tag_freqs is not None:
                         # Known words only consider tags actually seen with
                         # that surface form. The lexical term is P(word | tag).
@@ -785,6 +786,8 @@ class TnT(TaggerI):
                             candidate_tags = tuple(entries)
 
                     cache[cache_key] = candidate_tags
+                else:
+                    candidate_tags = cached
 
             new_states, best_logp = expand_states(states, candidate_tags)
 
@@ -884,7 +887,7 @@ class TnT(TaggerI):
         trans_logp_trigram = self._trans_logp_trigram
         trans_logp_bigram = self._trans_logp_bigram
 
-        new_states = {}
+        new_states: dict = {}
         new_states_get = new_states.get
         best_logp = float("-inf")
 

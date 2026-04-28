@@ -155,7 +155,7 @@ def test_eos_follows_sentence_final_punctuation(tagger):
     dot_state = _state(tagger, ".", ".")
 
     expected_bigram_count = 0
-    expected_trigram_counts = {}
+    expected_trigram_counts: dict = {}
 
     for sent in _TRAIN:
         if not sent or sent[-1][0] != ".":

@@ -587,10 +587,16 @@ class TnT(TaggerI):
         after this point depends only on the last two states, so the
         discarded path can never beat the kept one.
 
-        `candidate_tags` is a sequence of `(state_i, log_emit)` pairs.
-        `log_emit` is the lexical log-probability for known words, the
-        Bayes-inverted suffix score for unknown words, or zero for an
-        external unknown-word tagger.
+        `candidate_tags` is a sequence of `(state_i, log_emit,
+        unigram_logp)` triples. `log_emit` is the lexical log-probability
+        for known words, the Bayes-inverted suffix score for unknown
+        words, or zero for an external unknown-word tagger.
+        `unigram_logp` is the precomputed unigram-tier transition
+        log-probability for `state_i`, used as the fallback when the
+        trigram and bigram caches both miss; precomputing it once per
+        candidate (rather than re-fetching it from
+        ``_trans_logp_unigram`` per predecessor) was the dominant
+        cost on high-OOV corpora.
 
         :return: ``(new_states, best_logp)``. ``new_states`` maps
                  `(state_i_minus_1, state_i)` to
@@ -602,7 +608,6 @@ class TnT(TaggerI):
         """
         trans_logp_trigram = self._trans_logp_trigram
         trans_logp_bigram = self._trans_logp_bigram
-        unigram_logp_get = self._trans_logp_unigram.get
         new_states = {}
         best_logp = float("-inf")
         for predecessor_key, (prefix_logp, _) in states.items():
@@ -614,16 +619,16 @@ class TnT(TaggerI):
             bigram_logp = trans_logp_bigram.get(state_i_minus_1, _EMPTY_DICT)
             trigram_logp_get = trigram_logp.get
             bigram_logp_get = bigram_logp.get
-            for state_i, log_emit in candidate_tags:
+            for state_i, log_emit, unigram_logp in candidate_tags:
                 trans_logp = trigram_logp_get(state_i)
                 if trans_logp is None:
                     trans_logp = bigram_logp_get(state_i)
                     if trans_logp is None:
-                        # If the candidate state was never observed as a
-                        # unigram, keep the path alive with the model floor.
-                        # This is smoothing for unseen states, not only
-                        # protection around log2(0).
-                        trans_logp = unigram_logp_get(state_i, _LOG_FLOOR_2)
+                        # Unigram fallback (with floor for states never
+                        # observed as a unigram) was precomputed when
+                        # the candidate tuple was built, so we just read
+                        # it instead of doing a third dict lookup.
+                        trans_logp = unigram_logp
                 # Parens match the previous ``step_logp + prefix_logp``
                 # order so the sum is bit-identical to the old decoder.
                 path_logp = prefix_logp + (trans_logp + log_emit)
@@ -734,6 +739,7 @@ class TnT(TaggerI):
         word_tag_freqs = self._word_tag_freqs
         tag_unigrams = self._tag_unigrams
         inv_num_tag_tokens = _safe_inverse(self._num_tag_tokens)
+        trans_logp_unigram_get = self._trans_logp_unigram.get
         log2_beam_threshold = self._log2_beam_threshold
         cap_on = self._use_capitalization
         unk = self._unk
@@ -760,7 +766,9 @@ class TnT(TaggerI):
             # pure given ``(word, c_i)`` and the trained model, so they cache.
             if tag_freqs is None and unk is not None:
                 [(_word, tag)] = unk.tag([word])
-                candidate_tags = (((tag, c_i), 0.0),)
+                state_i = (tag, c_i)
+                unigram_logp = trans_logp_unigram_get(state_i, _LOG_FLOOR_2)
+                candidate_tags = ((state_i, 0.0, unigram_logp),)
             else:
                 cache_key = (word, c_i)
                 candidate_tags = cache.get(cache_key)
@@ -773,7 +781,14 @@ class TnT(TaggerI):
                         for tag, tag_count in tag_freqs.items():
                             state_i = (tag, c_i)
                             unigram_state_i = tag_unigrams[state_i]
-                            entries.append((state_i, log2(tag_count / unigram_state_i)))
+                            unigram_logp = trans_logp_unigram_get(state_i, _LOG_FLOOR_2)
+                            entries.append(
+                                (
+                                    state_i,
+                                    log2(tag_count / unigram_state_i),
+                                    unigram_logp,
+                                )
+                            )
                         candidate_tags = tuple(entries)
                     else:
                         # Unknown words use the suffix model as their lexical
@@ -784,12 +799,20 @@ class TnT(TaggerI):
                         if not suffix_scores:
                             # An untrained tagger has no suffix priors, so the
                             # only safe fallback is a literal ``Unk`` state.
-                            candidate_tags = ((("Unk", c_i), 0.0),)
+                            state_i = ("Unk", c_i)
+                            unigram_logp = trans_logp_unigram_get(state_i, _LOG_FLOOR_2)
+                            candidate_tags = ((state_i, 0.0, unigram_logp),)
                         else:
-                            candidate_tags = tuple(
-                                ((tag, c_i), _safe_log2(score))
-                                for tag, score in suffix_scores.items()
-                            )
+                            entries = []
+                            for tag, score in suffix_scores.items():
+                                state_i = (tag, c_i)
+                                unigram_logp = trans_logp_unigram_get(
+                                    state_i, _LOG_FLOOR_2
+                                )
+                                entries.append(
+                                    (state_i, _safe_log2(score), unigram_logp)
+                                )
+                            candidate_tags = tuple(entries)
 
                     cache[cache_key] = candidate_tags
 

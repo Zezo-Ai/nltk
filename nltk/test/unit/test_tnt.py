@@ -669,7 +669,7 @@ def test_decode_handles_oov_heavy_sentence_with_shared_suffixes():
     t.train(_TRAIN)
     trained_tags = {tag for sent in _TRAIN for _, tag in sent}
 
-    words = ["John", "watched", "friendo", "play", "happily", "."]
+    words = ["John", "watched", "friendo", "playing", "happily", "."]
     out = t.tag(words)
 
     _assert_tag_output(words, out)

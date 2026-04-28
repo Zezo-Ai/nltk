@@ -346,14 +346,16 @@ class TnT(TaggerI):
         lambda2_mass = 0.0
         lambda3_mass = 0.0
 
-        for state_i_minus_2, state_i_minus_1 in tag_trigrams.conditions():
+        # Sorting both iterations makes the lambda mass accumulation
+        # independent of training-data order.
+        for state_i_minus_2, state_i_minus_1 in sorted(tag_trigrams.conditions()):
             trigram_dist = tag_trigrams[(state_i_minus_2, state_i_minus_1)]
             bigram_dist = tag_bigrams[state_i_minus_1]
 
             trigram_n_minus_1 = trigram_dist.N() - 1
             bigram_n_minus_1 = bigram_dist.N() - 1
 
-            for state_i, count in trigram_dist.items():
+            for state_i, count in sorted(trigram_dist.items()):
                 # Subtracting one leaves the current event out, so each score
                 # asks which model order would best predict this tag if this
                 # occurrence were held out.
@@ -495,7 +497,7 @@ class TnT(TaggerI):
         word_tag_freqs = self._word_tag_freqs
 
         tag_counts: dict = {}
-        for (tag, _), count in tag_unigrams.items():
+        for (tag, _), count in sorted(tag_unigrams.items()):
             # The suffix model predicts lexical tags, not boundary markers.
             # Check the raw tag so EOS is excluded from all capitalization states.
             if tag == _EOS[0]:
@@ -527,7 +529,9 @@ class TnT(TaggerI):
             True: ConditionalFreqDist(),
         }
 
-        for word in word_tag_freqs.conditions():
+        # Sorting both iterations makes the suffix trie's per-bucket
+        # insertion order independent of training-data order.
+        for word in sorted(word_tag_freqs.conditions()):
             tag_freqs = word_tag_freqs[word]
             if not word or tag_freqs.N() > 10:
                 continue
@@ -537,7 +541,7 @@ class TnT(TaggerI):
 
             for m in range(1, max_suffix_len + 1):
                 suffix_dist = suffix_trie[word[-m:]]
-                for tag, count in tag_freqs.items():
+                for tag, count in sorted(tag_freqs.items()):
                     suffix_dist[tag] += count
 
         self._tag_prior_probs = tag_prior_probs
@@ -749,7 +753,7 @@ class TnT(TaggerI):
                         # Known words only consider tags actually seen with
                         # that surface form. The lexical term is P(word | tag).
                         entries = []
-                        for tag, tag_count in tag_freqs.items():
+                        for tag, tag_count in sorted(tag_freqs.items()):
                             state_i = (tag, c_i)
                             unigram_state_i = tag_unigrams[state_i]
                             unigram_logp = trans_logp_unigram_get(state_i, _LOG_FLOOR_2)

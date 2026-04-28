@@ -635,3 +635,115 @@ def test_candidate_cache_stable_across_repeated_sentence(tagger):
     tagger.tag(sent)
     size_after_second = len(tagger._candidate_tags_cache)
     assert size_after_first == size_after_second
+
+
+# ---------------------------------------------------------------------
+# Edge cases for beam and OOV logic
+# ---------------------------------------------------------------------
+
+
+def test_decode_is_repeat_stable_under_near_tie_beam():
+    """Tie-breaking in ``_expand_states`` is implicit (strict ``>`` keeps
+    the first-encountered path). Repeated decoding on the same input
+    must therefore agree even when several paths land within the beam
+    threshold of each other."""
+    train = [
+        [("the", "DT"), ("fish", "NN"), ("swims", "VBZ"), (".", ".")],
+        [("the", "DT"), ("fish", "NN"), ("swims", "NNS"), (".", ".")],
+        [("a", "DT"), ("cat", "NN"), ("naps", "VBZ"), (".", ".")],
+        [("a", "DT"), ("cat", "NN"), ("naps", "NNS"), (".", ".")],
+    ]
+    t = TnT(N=1000)
+    t.train(train)
+    words = ["the", "fish", "swims", "."]
+
+    outputs = [t.tag(words) for _ in range(10)]
+    assert all(out == outputs[0] for out in outputs)
+
+
+def test_decode_handles_oov_heavy_sentence_with_shared_suffixes():
+    """An all-OOV sentence forces every token through the suffix model.
+    The full path must still produce well-formed output drawn from the
+    trained tagset and remain stable across repeated decoding."""
+    t = TnT()
+    t.train(_TRAIN)
+    trained_tags = {tag for sent in _TRAIN for _, tag in sent}
+
+    words = ["John", "watched", "friendo", "play", "happily", "."]
+    out = t.tag(words)
+
+    _assert_tag_output(words, out)
+    assert all(tag in trained_tags for _, tag in out)
+
+    again = t.tag(words)
+    assert out == again
+
+
+def test_decode_handles_long_ambiguous_sentence():
+    """Beam pruning across many steps is where any iteration-order or
+    accumulation bug would surface. A long sentence built from
+    NN/VB-ambiguous tokens must still decode to completion and produce
+    consistent output across runs."""
+    train = [
+        [("the", "DT"), ("dogs", "NNS"), ("run", "VBP"), (".", ".")],
+        [("the", "DT"), ("dogs", "NNS"), ("bark", "VBP"), (".", ".")],
+        [("dogs", "NNS"), ("run", "VBP"), ("fast", "RB"), (".", ".")],
+        [("the", "DT"), ("run", "NN"), ("ended", "VBD"), (".", ".")],
+        [("a", "DT"), ("bark", "NN"), ("echoed", "VBD"), (".", ".")],
+    ]
+    t = TnT(N=1000)
+    t.train(train)
+
+    words = ["dogs", "run", "bark"] * 40 + ["."]
+    out = t.tag(words)
+
+    _assert_tag_output(words, out)
+    again = t.tag(words)
+    assert out == again
+
+
+def test_train_order_invariance_at_model_level():
+    """Reordering training sentences must not change the trained model.
+    Sorted iteration in ``_compute_lambda`` and ``_build_suffix_model``
+    makes every float-accumulating step bit-stable, so the weights, the
+    suffix-model priors, and the transition cache are all bit-identical
+    across training-data reorderings."""
+    a = TnT()
+    a.train(_TRAIN)
+
+    b = TnT()
+    b.train(list(reversed(_TRAIN)))
+
+    assert dict(a._tag_unigrams) == dict(b._tag_unigrams)
+    assert {prev: dict(dist) for prev, dist in a._tag_bigrams.items()} == {
+        prev: dict(dist) for prev, dist in b._tag_bigrams.items()
+    }
+    assert {prev: dict(dist) for prev, dist in a._tag_trigrams.items()} == {
+        prev: dict(dist) for prev, dist in b._tag_trigrams.items()
+    }
+    assert (a._lambda1, a._lambda2, a._lambda3) == (
+        b._lambda1,
+        b._lambda2,
+        b._lambda3,
+    )
+    assert a._tag_prior_probs == b._tag_prior_probs
+    assert a._theta == b._theta
+    assert a._trans_logp_unigram == b._trans_logp_unigram
+    assert a._trans_logp_bigram == b._trans_logp_bigram
+    assert a._trans_logp_trigram == b._trans_logp_trigram
+
+
+def test_decode_is_bit_stable_across_train_data_reorderings():
+    """Beyond the model state, decoded output must match across training
+    reorderings. With the trained model bit-identical, sorted candidate
+    construction in ``_tagword`` keeps the beam tie-breaking order
+    independent of input-data order."""
+    a = TnT()
+    a.train(_TRAIN)
+
+    b = TnT()
+    b.train(list(reversed(_TRAIN)))
+
+    for sent in _TRAIN:
+        words = [w for w, _ in sent]
+        assert a.tag(words) == b.tag(words)

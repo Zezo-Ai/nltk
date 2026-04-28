@@ -840,7 +840,13 @@ class Downloader:
         halt_on_error=True,
         raise_on_error=False,
         print_error_to=sys.stderr,
+        hf=False,
     ):
+        # Delegate to HuggingFace downloader when hf=True.
+        if hf and info_or_id is not None:
+            from nltk.huggingface.dataset import download as hf_download
+            return hf_download(info_or_id, quiet=quiet)
+
         print_to = functools.partial(print, file=print_error_to)
         # If no info or id is given, then use the interactive shell.
         if info_or_id is None:

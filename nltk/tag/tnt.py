@@ -1,8 +1,8 @@
 # Natural Language Toolkit: TnT Tagger
 #
 # Copyright (C) 2001-2026 NLTK Project
-# Author: Sam Huston <sjh900@gmail.com>
-#         John Winstead <https://github.com/jhnwnstd>
+# Author: John Winstead <https://github.com/jhnwnstd>
+#         Sam Huston <sjh900@gmail.com>
 #
 # URL: <https://www.nltk.org/>
 # For license information, see LICENSE.TXT
@@ -141,20 +141,20 @@ class TnT(TaggerI):
         :param unk: instance of a POS tagger, conforms to TaggerI.
                     When supplied, overrides the built-in suffix model
                     on the unknown-word path.
-        :type  unk: TaggerI
+        :type unk: TaggerI
         :param Trained: Indication that the POS tagger is trained or not.
                         Set True to skip training the optional ``unk``
                         tagger on the next train() call.
-        :type  Trained: bool
+        :type Trained: bool
         :param N: Beam search pruning threshold. After each Viterbi
                 step any state whose log-probability is worse than
                 the best by more than a factor of N is discarded.
                 Must be a positive integer; 1000 is a good default.
-        :type  N: int
+        :type N: int
         :param C: Capitalization flag. When True, tags are differentiated
                 by whether the source word is capitalized. This rarely
                 improves accuracy in practice.
-        :type  C: bool
+        :type C: bool
         """
 
         # Restricting N to a positive integer keeps the public contract
@@ -215,7 +215,7 @@ class TnT(TaggerI):
         new training set is rarely what callers want.
 
         :param data: list of lists of (word, tag) tuples
-        :type  data: list[list[tuple[str, str]]]
+        :type data: list[list[tuple[str, str]]]
         """
 
         # These structures accumulate corpus statistics, so retraining must
@@ -304,7 +304,7 @@ class TnT(TaggerI):
         each output sentence is a list of (word, tag) tuples.
 
         :param data: list of list of words
-        :type  data: list[list[str]]
+        :type data: list[list[str]]
         :param segment: forwarded to ``tag``. Pass True to auto-split
                         each input on internal [.!?;] punctuation.
         :type segment: bool
@@ -911,159 +911,156 @@ class TnT(TaggerI):
         return [(word, states[i + 2][0]) for i, word in enumerate(words)]
 
 
-########################################
-# helper function -- basic sentence tokenizer
-########################################
+# -----------------------------
+# Sentence segmentation helpers
+# -----------------------------
 
 
-def basic_sent_chop(data, raw=True):
+def basic_sent_chop(data, raw=True, sent_marks=_SENT_MARKS):
     """
-    Basic method for tokenizing input into sentences
-    for this tagger:
+    Split a flat token sequence into sentence-like segments.
 
-    :param data: list of tokens (words or (word, tag) tuples)
-    :type data: str or tuple(str, str)
-    :param raw: boolean flag marking the input data
-                as a list of words or a list of tagged words
-    :type raw: bool
-    :return: list of sentences
-             sentences are a list of tokens
-             tokens are the same as the input
+    Splits after tokens whose surface form appears in ``sent_marks``.
+    Works for raw tokens and tagged ``(word, tag)`` tokens.
 
-    Function takes a list of tokens and separates the tokens into lists
-    where each list represents a sentence fragment
-    This function can separate both tagged and raw sequences into
-    basic sentences.
-
-    Sentence markers are the set of [.!?;]
-
-    This is a simple method which enhances the performance of the TnT
-    tagger. Better sentence tokenization will further enhance the results.
+    :param data: flat sequence of tokens or ``(word, tag)`` tuples
+    :param raw: whether ``data`` contains raw tokens
+    :param sent_marks: token strings that end a sentence segment
+    :return: list of sentence segments with the same token shape as input
     """
+    sent_marks = set(sent_marks)
+    sentences = []
+    sentence = []
 
-    new_data = []
-    curr_sent = []
+    for token in data:
+        sentence.append(token)
+        word = token if raw else token[0]
+        if word in sent_marks:
+            sentences.append(sentence)
+            sentence = []
 
-    if raw:
-        for word in data:
-            curr_sent.append(word)
-            if word in _SENT_MARKS:
-                new_data.append(curr_sent)
-                curr_sent = []
-    else:
-        for word, tag in data:
-            curr_sent.append((word, tag))
-            if word in _SENT_MARKS:
-                new_data.append(curr_sent)
-                curr_sent = []
+    if sentence:
+        sentences.append(sentence)
 
-    if curr_sent:
-        new_data.append(curr_sent)
-
-    return new_data
+    return sentences
 
 
-def demo():
-    from nltk.corpus import brown
+# ------------
+# Demo helpers
+# ------------
 
-    sents = list(brown.tagged_sents())
-    test = list(brown.sents())
 
-    tagger = TnT()
-    tagger.train(sents[200:1000])
+def _treebank_demo_split(test_size=1000):
+    """Return train, held-out final Treebank slice, and train vocabulary."""
+    from nltk.corpus import treebank
 
-    tagged_data = tagger.tagdata(test[100:120])
+    sents = list(treebank.tagged_sents())
+    if not 0 < test_size < len(sents):
+        raise ValueError(
+            f"test_size must be between 1 and {len(sents) - 1}, got {test_size!r}"
+        )
 
-    for j in range(len(tagged_data)):
-        s = tagged_data[j]
-        t = sents[j + 100]
-        for i in range(len(s)):
-            print(s[i], "--", t[i])
+    cut = len(sents) - test_size
+    train_sents = sents[:cut]
+    test_sents = sents[cut:]
+    train_vocab = {word for sent in train_sents for word, _ in sent}
+    return train_sents, test_sents, train_vocab
+
+
+def _score_tagger(tagger, test_sents, train_vocab):
+    """Return overall, seen, and OOV scores for tagged sentences."""
+    correct = total = 0
+    seen_correct = seen_total = 0
+    oov_correct = oov_total = 0
+
+    for sent in test_sents:
+        words = [word for word, _ in sent]
+        gold = [tag for _, tag in sent]
+        pred = [tag for _, tag in tagger.tag(words)]
+
+        if len(pred) != len(gold):
+            raise ValueError(f"tagger returned {len(pred)} tags for {len(gold)} tokens")
+
+        for word, guess, truth in zip(words, pred, gold):
+            total += 1
+            hit = guess == truth
+            if hit:
+                correct += 1
+
+            if word in train_vocab:
+                seen_total += 1
+                if hit:
+                    seen_correct += 1
+            else:
+                oov_total += 1
+                if hit:
+                    oov_correct += 1
+
+    return {
+        "accuracy": correct / total if total else 0.0,
+        "seen_accuracy": seen_correct / seen_total if seen_total else None,
+        "oov_accuracy": oov_correct / oov_total if oov_total else None,
+        "oov_rate": oov_total / total if total else 0.0,
+        "total": total,
+        "seen_total": seen_total,
+        "oov_total": oov_total,
+    }
+
+
+def _format_score(score):
+    return "n/a" if score is None else f"{score:.4f}"
+
+
+# -----
+# Demos
+# -----
+
+
+def demo(test_size=1000):
+    """Evaluate TnT on a held-out Treebank slice."""
+    train_sents, test_sents, train_vocab = _treebank_demo_split(test_size)
+
+    for use_capitalization in (False, True):
+        tagger = TnT(N=1000, C=use_capitalization)
+        tagger.train(train_sents)
+        scores = _score_tagger(tagger, test_sents, train_vocab)
+
+        print(f"Capitalization: {use_capitalization}")
+        print(f"Accuracy:       {scores['accuracy']:.4f}")
+        print(f"Seen accuracy:  {_format_score(scores['seen_accuracy'])}")
+        print(f"OOV accuracy:   {_format_score(scores['oov_accuracy'])}")
+        print(f"OOV rate:       {scores['oov_rate']:.4f}")
         print()
 
 
-def demo2():
-    from nltk.corpus import treebank
+def demo_errors(limit=25, test_size=1000):
+    """Print the first ``limit`` errors from a held-out Treebank slice."""
+    if limit < 1:
+        raise ValueError(f"limit must be at least 1, got {limit!r}")
 
-    d = list(treebank.tagged_sents())
+    train_sents, test_sents, train_vocab = _treebank_demo_split(test_size)
 
-    t = TnT(N=1000, C=False)
-    s = TnT(N=1000, C=True)
-    t.train(d[(11) * 100 :])
-    s.train(d[(11) * 100 :])
+    tagger = TnT(N=1000, C=True)
+    tagger.train(train_sents)
 
-    for i in range(10):
-        tacc = t.accuracy(d[i * 100 : ((i + 1) * 100)])
-        tp_un = t.unknown / (t.known + t.unknown)
-        tp_kn = t.known / (t.known + t.unknown)
-        t.unknown = 0
-        t.known = 0
+    shown = 0
+    for sent in test_sents:
+        words = [word for word, _ in sent]
+        gold = [tag for _, tag in sent]
+        pred = [tag for _, tag in tagger.tag(words)]
 
-        print("Capitalization off:")
-        print("Accuracy:", tacc)
-        print("Percentage known:", tp_kn)
-        print("Percentage unknown:", tp_un)
+        if len(pred) != len(gold):
+            raise ValueError(f"tagger returned {len(pred)} tags for {len(gold)} tokens")
 
-        sacc = s.accuracy(d[i * 100 : ((i + 1) * 100)])
-        sp_un = s.unknown / (s.known + s.unknown)
-        sp_kn = s.known / (s.known + s.unknown)
-        s.unknown = 0
-        s.known = 0
+        for word, guess, truth in zip(words, pred, gold):
+            if guess == truth:
+                continue
 
-        print("Capitalization on:")
-        print("Accuracy:", sacc)
-        print("Percentage known:", sp_kn)
-        print("Percentage unknown:", sp_un)
+            status = "seen" if word in train_vocab else "OOV"
+            print(f"{word!r} ({status}): guessed {guess!r}, gold {truth!r}")
+            shown += 1
+            if shown >= limit:
+                return
 
-
-def demo3():
-    from nltk.corpus import brown, treebank
-
-    d = list(treebank.tagged_sents())
-    e = list(brown.tagged_sents())
-
-    d = d[:1000]
-    e = e[:1000]
-
-    d10 = int(len(d) * 0.1)
-    e10 = int(len(e) * 0.1)
-
-    tallacc = 0
-    sallacc = 0
-    tknown = 0
-    sknown = 0
-
-    for i in range(10):
-        t = TnT(N=1000, C=False)
-        s = TnT(N=1000, C=False)
-
-        dtest = d[(i * d10) : ((i + 1) * d10)]
-        etest = e[(i * e10) : ((i + 1) * e10)]
-
-        dtrain = d[: (i * d10)] + d[((i + 1) * d10) :]
-        etrain = e[: (i * e10)] + e[((i + 1) * e10) :]
-
-        t.train(dtrain)
-        s.train(etrain)
-
-        tacc = t.accuracy(dtest)
-        tp_un = t.unknown / (t.known + t.unknown)
-        tp_kn = t.known / (t.known + t.unknown)
-        tknown += tp_kn
-        t.unknown = 0
-        t.known = 0
-
-        sacc = s.accuracy(etest)
-        sp_un = s.unknown / (s.known + s.unknown)
-        sp_kn = s.known / (s.known + s.unknown)
-        sknown += sp_kn
-        s.unknown = 0
-        s.known = 0
-
-        tallacc += tacc
-        sallacc += sacc
-
-    print("brown   : overall accuracy:", 10 * tallacc)
-    print("        : words known:", 10 * tknown)
-    print("treebank: overall accuracy:", 10 * sallacc)
-    print("        : words known:", 10 * sknown)
+    if shown == 0:
+        print("No errors found.")

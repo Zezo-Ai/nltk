@@ -538,3 +538,100 @@ def test_trained_tagger_round_trips_through_pickle(tagger):
     for sent in _TRAIN:
         words = [w for w, _ in sent]
         assert restored.tag(words) == tagger.tag(words)
+
+
+# ---------------------------------------------------------------------
+# Input shape guards
+# ---------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("bad", ["the cat sat", b"the cat sat"])
+def test_tag_rejects_string_or_bytes_input(tagger, bad):
+    """``tag()`` accepts any iterable, but ``str`` would iterate over
+    characters and ``bytes`` would iterate over ints. Catch the common
+    "forgot to tokenize" mistake at the boundary."""
+    with pytest.raises(TypeError, match="list of tokens"):
+        tagger.tag(bad)
+
+
+@pytest.mark.parametrize("bad", ["the cat sat", b"the cat sat"])
+def test_tagdata_rejects_string_or_bytes_input(tagger, bad):
+    """``tagdata()`` expects a list of tokenized sentences. A bare
+    ``str`` or ``bytes`` would otherwise be interpreted as a sequence
+    of one-character or one-int sentences."""
+    with pytest.raises(TypeError, match="list of tokenized sentences"):
+        tagger.tagdata(bad)
+
+
+def test_external_unk_returning_extra_tags_raises_clear_error():
+    """A misbehaving external ``unk`` tagger that returns more than one
+    tagged token for a single input word must raise a clear
+    ``ValueError`` instead of an unrelated ``too many values to unpack``
+    from tuple destructuring."""
+
+    class ExtraUnk:
+        def train(self, _data):
+            pass
+
+        def tag(self, toks):
+            return [(toks[0], "X"), ("extra", "X")]
+
+    t = TnT(unk=ExtraUnk())
+    t.train(_TRAIN)
+    with pytest.raises(ValueError, match="returned 2 tags"):
+        t.tag(["xyzzy"])
+
+
+def test_external_unk_returning_no_tags_raises_clear_error():
+    """An external ``unk`` tagger that returns an empty list for a
+    single-word input must also raise a clear ``ValueError``."""
+
+    class EmptyUnk:
+        def train(self, _data):
+            pass
+
+        def tag(self, _toks):
+            return []
+
+    t = TnT(unk=EmptyUnk())
+    t.train(_TRAIN)
+    with pytest.raises(ValueError, match="returned 0 tags"):
+        t.tag(["xyzzy"])
+
+
+def test_external_unk_called_for_each_occurrence_not_cached():
+    """Repeated OOV occurrences must invoke the external ``unk`` tagger
+    each time. The unk path is intentionally uncached because user-
+    supplied taggers may carry state or have side effects, so caching
+    a single-token output could silently change behavior."""
+
+    class CountingUnk:
+        def __init__(self):
+            self.calls = 0
+
+        def train(self, _data):
+            pass
+
+        def tag(self, toks):
+            self.calls += 1
+            return [(toks[0], "UNK")]
+
+    unk = CountingUnk()
+    t = TnT(unk=unk)
+    t.train(_TRAIN)
+    t.tag(["xyzzy"])
+    t.tag(["xyzzy"])
+    t.tag(["xyzzy"])
+    assert unk.calls == 3
+
+
+def test_candidate_cache_stable_across_repeated_sentence(tagger):
+    """The candidate-tags cache should not grow after a repeated pass
+    over the same sentence. The first pass may add entries; the second
+    pass should be pure cache hits for the same ``(word, c_i)`` keys."""
+    sent = ["xyzzy", "asdfgh", "the", "cat"]
+    tagger.tag(sent)
+    size_after_first = len(tagger._candidate_tags_cache)
+    tagger.tag(sent)
+    size_after_second = len(tagger._candidate_tags_cache)
+    assert size_after_first == size_after_second

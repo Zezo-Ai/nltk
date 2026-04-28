@@ -292,6 +292,12 @@ class TnT(TaggerI):
         :type segment: bool
         :return: list of `(word, tag)` tuples
         """
+        # Catch "forgot to tokenize" mistake before it produces garbage tags.
+        if isinstance(tokens, (str, bytes)):
+            raise TypeError(
+                "tag() expects a list of tokens, not a single string or bytes. "
+                "Tokenize first (e.g. tokens.split() or word_tokenize(s))."
+            )
         if segment:
             return self._tag_segmented(tokens)
         if not (sent := list(tokens)):
@@ -310,6 +316,11 @@ class TnT(TaggerI):
         :type segment: bool
         :return: list of list of (word, tag) tuples
         """
+        if isinstance(data, (str, bytes)):
+            raise TypeError(
+                "tagdata() expects a list of tokenized sentences, "
+                "not a single string or bytes object."
+            )
         return [self.tag(sent, segment=segment) for sent in data]
 
     def _compute_lambda(self):
@@ -715,7 +726,16 @@ class TnT(TaggerI):
             # stateful. The built-in known-word and suffix-model paths are
             # pure given ``(word, c_i)`` and the trained model, so they cache.
             if tag_freqs is None and unk is not None:
-                [(_word, tag)] = unk.tag([word])
+                # Validate length before destructuring so a misbehaving
+                # external tagger surfaces a clear error instead of a
+                # cryptic "too many values to unpack" message.
+                unk_out = list(unk.tag([word]))
+                if len(unk_out) != 1:
+                    raise ValueError(
+                        f"unk tagger returned {len(unk_out)} tags for 1 word; "
+                        f"expected exactly 1"
+                    )
+                ((_word, tag),) = unk_out
                 state_i = (tag, c_i)
                 unigram_logp = trans_logp_unigram_get(state_i, _LOG_FLOOR_2)
                 candidate_tags = ((state_i, 0.0, unigram_logp),)

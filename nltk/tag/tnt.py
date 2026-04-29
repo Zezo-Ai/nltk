@@ -131,6 +131,13 @@ class TnT(TaggerI):
     When ``C=True``, capitalization is included in the tag state. This
     is equivalent to splitting each tag into capitalized and
     uncapitalized variants, as described by Brants (2000), section 2.4.
+
+    Reproducibility
+
+    Training-time iteration is sorted in ``_compute_lambda``,
+    ``_build_suffix_model``, and ``_tagword``'s candidate construction,
+    so the trained model and decoded output are bit-identical across
+    reorderings of equivalent training data.
     """
 
     def __init__(self, unk=None, Trained=False, N=1000, C=False):
@@ -801,9 +808,9 @@ class TnT(TaggerI):
             states = {k: v for k, v in new_states.items() if v[0] >= cutoff}
             state_history.append(states)
 
-        # Scored inline rather than via the transition cache to preserve
-        # the previous decoder's floating-point evaluation order; per-call
-        # cost is small relative to the inner Viterbi loop.
+        # Inline ``count / N`` instead of the cache's ``count * (1/N)``
+        # keeps EOS bit-identical to the pre-cache decoder. EOS is scored
+        # once per sentence, so the cache speedup wouldn't matter here.
         tag_bigrams = self._tag_bigrams
         tag_trigrams = self._tag_trigrams
         lambda1, lambda2, lambda3 = self._lambda1, self._lambda2, self._lambda3
@@ -867,7 +874,9 @@ class TnT(TaggerI):
         same key, keep the higher-scoring one and discard the other. The
         second-order Markov assumption means everything after this point
         depends only on the last two states, so the discarded path can
-        never beat the kept one.
+        never beat the kept one. Ties (equal `path_logp`) are broken by
+        keeping the first-encountered path; sorted candidate construction
+        upstream makes that tie-break deterministic.
 
         `candidate_tags` is a sequence of `(state_i, log_emit,
         unigram_logp)` triples. `log_emit` is the lexical log-probability

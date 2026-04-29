@@ -529,12 +529,25 @@ def test_tag_sents_matches_per_sentence_tag(tagger):
 
 
 def test_trained_tagger_round_trips_through_pickle(tagger):
-    """A trained ``TnT`` instance must survive a ``pickle`` round trip
-    with identical decode behavior. NLTK users routinely serialize
-    trained taggers, so this is a real contract."""
+    """A trained ``TnT`` must survive a ``pickle`` round trip with
+    identical trained state and identical decode behavior. NLTK users
+    routinely serialize trained taggers, so the contract covers every
+    field that contributes to decoding, not just the resulting tags."""
     import pickle
 
     restored = pickle.loads(pickle.dumps(tagger))
+
+    assert (tagger._lambda1, tagger._lambda2, tagger._lambda3) == (
+        restored._lambda1,
+        restored._lambda2,
+        restored._lambda3,
+    )
+    assert tagger._tag_prior_probs == restored._tag_prior_probs
+    assert tagger._theta == restored._theta
+    assert tagger._trans_logp_unigram == restored._trans_logp_unigram
+    assert tagger._trans_logp_bigram == restored._trans_logp_bigram
+    assert tagger._trans_logp_trigram == restored._trans_logp_trigram
+
     for sent in _TRAIN:
         words = [w for w, _ in sent]
         assert restored.tag(words) == tagger.tag(words)
@@ -661,13 +674,18 @@ def test_decode_is_repeat_stable_under_near_tie_beam():
     assert all(out == outputs[0] for out in outputs)
 
 
-def test_decode_handles_oov_heavy_sentence_with_shared_suffixes():
+@pytest.mark.parametrize(
+    "train",
+    [pytest.param(_TRAIN, id="full"), pytest.param(_TRAIN[:1], id="one_sent")],
+)
+def test_decode_handles_oov_heavy_sentence_with_shared_suffixes(train):
     """An all-OOV sentence forces every token through the suffix model.
-    The full path must still produce well-formed output drawn from the
-    trained tagset and remain stable across repeated decoding."""
+    The path must produce well-formed output drawn from the trained
+    tagset and remain stable across repeated decoding, including when
+    the training set is too small to populate the suffix model densely."""
     t = TnT()
-    t.train(_TRAIN)
-    trained_tags = {tag for sent in _TRAIN for _, tag in sent}
+    t.train(train)
+    trained_tags = {tag for sent in train for _, tag in sent}
 
     words = ["John", "watched", "friendo", "playing", "happily", "."]
     out = t.tag(words)

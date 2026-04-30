@@ -285,6 +285,12 @@ def test_empty_training_zeroes_lambdas():
     assert (t._lambda1, t._lambda2, t._lambda3) == (0.0, 0.0, 0.0)
 
 
+def test_lambdas_are_non_negative_and_sum_to_one(tagger):
+    lambdas = (tagger._lambda1, tagger._lambda2, tagger._lambda3)
+    assert all(x >= 0 for x in lambdas)
+    assert math.isclose(sum(lambdas), 1.0, abs_tol=1e-12)
+
+
 def test_repeated_train_rebuilds_state():
     t = _trained_tagger(_AMBIGUITY_TRAIN)
     t.tag(["doodad"])
@@ -465,6 +471,11 @@ def test_segmentation_shapes(tagger, words, segment, expected_len):
     assert len(out) == expected_len
     if expected_len > 0:
         _assert_tag_output(words, out)
+
+
+def test_segment_true_matches_segment_false_on_single_sentence(tagger):
+    words = ["the", "cat", "ran", "."]
+    assert tagger.tag(words) == tagger.tag(words, segment=True)
 
 
 def test_tagdata_segment_kwarg_forwards_to_tag(tagger):

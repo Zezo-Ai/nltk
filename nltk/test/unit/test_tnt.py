@@ -15,8 +15,6 @@ from nltk.tag.tnt import (
     _safe_log2,
 )
 
-# --- Shared fixtures, corpora, helpers, and unk mocks ---
-
 _TRAIN = [
     [("the", "DT"), ("cat", "NN"), ("ran", "VBD"), (".", ".")],
     [("the", "DT"), ("running", "VBG"), ("dog", "NN"), ("barked", "VBD"), (".", ".")],
@@ -178,7 +176,7 @@ def _decode_mutation_snapshot(tagger):
     )
 
 
-def _direct_logp(tagger, prev2, prev1, current):
+def _deleted_interpolation_logp(tagger, prev2, prev1, current):
     """Reference deleted-interpolation transition log-prob from the
     trained n-gram counts (the formula the cache should match)."""
     l1, l2, l3 = tagger._lambda1, tagger._lambda2, tagger._lambda3
@@ -205,7 +203,7 @@ def _cached_logp(tagger, prev2, prev1, current):
 
 
 def _assert_transition_match(tagger, prev2, prev1, current):
-    assert _cached_logp(tagger, prev2, prev1, current) == _direct_logp(
+    assert _cached_logp(tagger, prev2, prev1, current) == _deleted_interpolation_logp(
         tagger, prev2, prev1, current
     )
 
@@ -247,7 +245,8 @@ def _assert_transition_cache_matches_formula(tagger):
         _cached_logp(tagger, _BOGUS_PREV2, _BOGUS_PREV1, _BOGUS_STATE) == _LOG_FLOOR_2
     )
     assert (
-        _direct_logp(tagger, _BOGUS_PREV2, _BOGUS_PREV1, _BOGUS_STATE) == _LOG_FLOOR_2
+        _deleted_interpolation_logp(tagger, _BOGUS_PREV2, _BOGUS_PREV1, _BOGUS_STATE)
+        == _LOG_FLOOR_2
     )
 
 
@@ -264,9 +263,6 @@ def reordered_taggers(request):
     )
 
 
-# --- Constructor and training semantics ---
-
-
 @pytest.mark.parametrize(
     "bad",
     [0, -1, 0.5, math.nan, math.inf, -math.inf, True, False, "1000", None, [1000]],
@@ -276,20 +272,20 @@ def test_invalid_n_raises_value_error(bad):
         TnT(N=bad)
 
 
-def test_empty_training_zeroes_lambdas():
+def test_empty_training_resets_interpolation_weights():
     t = _trained_tagger([])
     assert (t._lambda1, t._lambda2, t._lambda3) == (0.0, 0.0, 0.0)
 
 
-def test_lambdas_are_non_negative_and_sum_to_one(tagger):
+def test_interpolation_weights_are_normalized(tagger):
     lambdas = (tagger._lambda1, tagger._lambda2, tagger._lambda3)
     assert all(x >= 0 for x in lambdas)
     assert math.isclose(sum(lambdas), 1.0, abs_tol=1e-12)
 
 
-def test_repeated_train_rebuilds_state():
+def test_repeated_train_rebuilds_state_and_clears_decode_cache():
     t = _trained_tagger(_AMBIGUITY_TRAIN)
-    t.tag(["doodad"])
+    t.tag(["xyzzy"])
     assert t._candidate_tags_cache
 
     t.train(_TRAIN)
@@ -303,7 +299,7 @@ def test_repeated_train_rebuilds_state():
     [(False, 1), (True, 0)],
     ids=["default", "trained_flag"],
 )
-def test_external_unk_is_trained_only_when_needed(trained_flag, expected_calls):
+def test_external_unk_train_respects_trained_flag(trained_flag, expected_calls):
     cu = _CountingUnk()
     t = _trained_tagger(unk=cu, Trained=trained_flag)
     assert cu.train_calls == expected_calls
@@ -311,10 +307,7 @@ def test_external_unk_is_trained_only_when_needed(trained_flag, expected_calls):
     assert cu.train_calls == expected_calls
 
 
-# --- Boundary counts and read-only decode state ---
-
-
-def test_eos_follows_sentence_final_punctuation(tagger):
+def test_train_records_eos_after_sentence_final_tag(tagger):
     """EOS is folded into unigram/bigram/trigram counts and attributed
     to the actual final-tag history from training, not a hardcoded
     predecessor."""
@@ -345,7 +338,7 @@ def test_empty_sentences_do_not_record_eos_at_bos():
     assert _EOS not in t._tag_trigrams[(_BOS, _BOS)]
 
 
-def test_decode_does_not_mutate_trained_state(tagger):
+def test_tagging_oov_words_does_not_mutate_trained_counts(tagger):
     before = _decode_mutation_snapshot(tagger)
 
     for word in _OOV_WORDS:
@@ -354,14 +347,11 @@ def test_decode_does_not_mutate_trained_state(tagger):
     assert _decode_mutation_snapshot(tagger) == before
 
 
-# --- Unknown-word and external-unk handling ---
-
-
-def test_unknown_word_falls_back_to_unk_when_priors_empty():
+def test_untrained_tagger_tags_unknown_word_as_unk():
     assert TnT().tag(["xyzzy"]) == [("xyzzy", "Unk")]
 
 
-def test_external_unk_returning_unseen_tag_survives_decode():
+def test_external_unk_unseen_tag_uses_transition_floor():
     """An external ``unk`` may return a tag never seen during training;
     the transition cache falls through to the model floor and the path
     stays alive."""
@@ -369,7 +359,7 @@ def test_external_unk_returning_unseen_tag_survives_decode():
     assert t.tag(["xyzzy"]) == [("xyzzy", "NONESUCH")]
 
 
-def test_external_unk_bypasses_decode_cache():
+def test_external_unk_is_not_cached():
     """Stateful ``unk`` taggers must be invoked on every call; otherwise
     caching collapses their varying output into a single result."""
     t = _trained_tagger(unk=_AlternatingUnk())
@@ -382,20 +372,14 @@ def test_external_unk_bypasses_decode_cache():
     [(_ExtraTagsUnk, 2), (_EmptyOutputUnk, 0)],
     ids=["extra_tags", "no_tags"],
 )
-def test_external_unk_returning_wrong_count_raises_clear_error(unk_class, expected_n):
+def test_external_unk_wrong_length_output_raises_clear_error(unk_class, expected_n):
     t = _trained_tagger(unk=unk_class())
     with pytest.raises(ValueError, match=f"returned {expected_n} tags for 1 word"):
         t.tag(["xyzzy"])
 
 
-# --- Transition probabilities and cache correctness ---
-
-
-def test_transition_logp_cache_matches_direct_formula(tagger):
+def test_transition_logp_cache_matches_deleted_interpolation_formula(tagger):
     _assert_transition_cache_matches_formula(tagger)
-
-
-# --- Decode shape, pruning, and stability ---
 
 
 def test_known_words_decode_to_their_only_seen_tag(tagger):
@@ -403,13 +387,13 @@ def test_known_words_decode_to_their_only_seen_tag(tagger):
         assert tagger.tag(_words(sent)) == sent
 
 
-def test_threshold_pruning_does_not_empty_beam_under_ambiguity():
+def test_threshold_pruning_keeps_viable_ambiguous_beam():
     t = _trained_tagger(_AMBIGUITY_TRAIN, N=2)
     words = ["the", "dogs", "."]
     _assert_tag_output(words, t.tag(words))
 
 
-def test_decode_is_repeat_stable_under_near_tie_beam():
+def test_decode_tie_breaking_is_repeat_stable():
     t = _trained_tagger(_AMBIGUITY_TRAIN, N=1000)
     _assert_decode_stable(t, ["the", "fish", "swims", "."], repeats=10)
 
@@ -418,7 +402,7 @@ def test_decode_is_repeat_stable_under_near_tie_beam():
     "train",
     [pytest.param(_TRAIN, id="full"), pytest.param(_TRAIN[:1], id="one_sent")],
 )
-def test_decode_handles_oov_heavy_sentence_with_shared_suffixes(train):
+def test_suffix_model_decodes_oov_heavy_sentence_repeatably(train):
     t = _trained_tagger(train)
     out = _assert_decode_stable(t, _OOV_HEAVY_SENT)
 
@@ -426,7 +410,7 @@ def test_decode_handles_oov_heavy_sentence_with_shared_suffixes(train):
     assert all(tag in _trained_tags(train) for _, tag in out)
 
 
-def test_decode_handles_long_ambiguous_sentence():
+def test_iterative_decode_handles_long_ambiguous_sentence():
     """Long ambiguous input must decode iteratively and repeatably. The
     length is above Python's default recursion limit, so a recursive
     decoder would fail here."""
@@ -435,15 +419,12 @@ def test_decode_handles_long_ambiguous_sentence():
     _assert_tag_output(_LONG_AMBIGUOUS_SENT, out)
 
 
-def test_candidate_cache_stable_across_repeated_sentence(tagger):
+def test_candidate_cache_does_not_grow_on_repeated_sentence(tagger):
     sent = _OOV_WORDS[:2] + ["the", "cat"]
     tagger.tag(sent)
     size_after_first = len(tagger._candidate_tags_cache)
     tagger.tag(sent)
     assert len(tagger._candidate_tags_cache) == size_after_first
-
-
-# --- Segmentation and input-shape guards ---
 
 
 @pytest.mark.parametrize(
@@ -455,7 +436,7 @@ def test_candidate_cache_stable_across_repeated_sentence(tagger):
         (["the", "cat", ".", "the", "dog"], True, 5),
     ],
 )
-def test_segmentation_shapes(tagger, words, segment, expected_len):
+def test_segmented_tagging_preserves_output_shape(tagger, words, segment, expected_len):
     out = tagger.tag(words, segment=segment)
     assert len(out) == expected_len
     if expected_len > 0:
@@ -467,7 +448,7 @@ def test_segment_true_matches_segment_false_on_single_sentence(tagger):
     assert tagger.tag(words) == tagger.tag(words, segment=True)
 
 
-def test_tagdata_segment_kwarg_forwards_to_tag(tagger):
+def test_tagdata_forwards_segment_kwarg_to_tag(tagger):
     inputs = [
         ["the", "cat", ".", "the", "dog", "."],
         ["beagles", "are", "happy", "to", "rest", "."],
@@ -482,7 +463,7 @@ def test_tagdata_segment_kwarg_forwards_to_tag(tagger):
     [("tag", "list of tokens"), ("tagdata", "list of tokenized sentences")],
 )
 @pytest.mark.parametrize("bad", ["the cat sat", b"the cat sat"])
-def test_string_or_bytes_input_is_rejected(tagger, bad, method, match):
+def test_tag_and_tagdata_reject_string_or_bytes_input(tagger, bad, method, match):
     """``str`` would iterate over characters and ``bytes`` over ints; each
     method catches the common 'forgot to tokenize' mistake at its own
     boundary."""
@@ -490,10 +471,7 @@ def test_string_or_bytes_input_is_rejected(tagger, bad, method, match):
         getattr(tagger, method)(bad)
 
 
-# --- Serialization and reproducibility ---
-
-
-def test_trained_tagger_round_trips_through_pickle(tagger):
+def test_pickle_round_trip_preserves_model_state_and_tags(tagger):
     import pickle
 
     restored = pickle.loads(pickle.dumps(tagger))
@@ -503,11 +481,11 @@ def test_trained_tagger_round_trips_through_pickle(tagger):
         assert restored.tag(_words(sent)) == tagger.tag(_words(sent))
 
 
-def test_train_order_invariance_at_model_level(reordered_taggers):
+def test_training_data_reordering_preserves_model_state(reordered_taggers):
     _assert_model_state_equal(*reordered_taggers)
 
 
-def test_decode_is_bit_stable_across_train_data_reorderings(reordered_taggers):
+def test_training_data_reordering_preserves_decoded_output(reordered_taggers):
     a, b = reordered_taggers
     for sent in _TRAIN:
         assert a.tag(_words(sent)) == b.tag(_words(sent))

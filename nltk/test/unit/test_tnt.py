@@ -35,9 +35,9 @@ _AMBIGUITY_TRAIN = [
     [("a", "DT"), ("bark", "NN"), ("echoed", "VBD"), (".", ".")],
 ]
 
-_OOV_WORDS = ["xyzzy", "friendo", "doodad", "phlogiston"]
+_OOV_WORDS = ["xyzzy", "friendo", "diogenes", "phlogiston"]
 _OOV_HEAVY_SENT = ["doodad", "watched", "friendo", "playing", "happily", "."]
-_LONG_AMBIGUOUS_SENT = ["dogs", "run", "bark"] * 334 + ["."]
+_LONG_AMBIGUOUS_SENT = ["dogs", "run", "bark"] * 334 + ["."]  # 1003 tokens
 
 _MODEL_STATE_FIELDS = (
     "_lambda1",
@@ -107,7 +107,9 @@ class _EmptyOutputUnk:
         return []
 
 
-def _trained_tagger(train_data=_TRAIN, **kwargs):
+def _trained_tagger(train_data=None, **kwargs):
+    if train_data is None:
+        train_data = _TRAIN
     t = TnT(**kwargs)
     t.train(train_data)
     return t
@@ -159,6 +161,9 @@ def _model_state(tagger):
 
 
 def _assert_model_state_equal(a, b):
+    assert a._beam_threshold == b._beam_threshold
+    assert a._use_capitalization == b._use_capitalization
+    assert a._unk_trained == b._unk_trained
     assert dict(a._tag_unigrams) == dict(b._tag_unigrams)
     assert _cfd_snapshot(a._tag_bigrams) == _cfd_snapshot(b._tag_bigrams)
     assert _cfd_snapshot(a._tag_trigrams) == _cfd_snapshot(b._tag_trigrams)
@@ -169,19 +174,11 @@ def _assert_model_state_equal(a, b):
 
 def _decode_mutation_snapshot(tagger):
     return (
-        set(tagger._suffix_trie_by_cap[False].conditions()),
-        set(tagger._tag_bigrams.conditions()),
-        set(tagger._tag_trigrams.conditions()),
-    )
-
-
-def _count_snapshot(tagger):
-    return (
-        tagger._tag_unigrams.N(),
-        sum(d.N() for d in tagger._tag_bigrams.values()),
-        sum(d.N() for d in tagger._tag_trigrams.values()),
-        len(tagger._word_tag_freqs.conditions()),
-        tagger._num_tag_tokens,
+        dict(tagger._tag_unigrams),
+        _cfd_snapshot(tagger._tag_bigrams),
+        _cfd_snapshot(tagger._tag_trigrams),
+        _cfd_snapshot(tagger._word_tag_freqs),
+        _suffix_snapshot(tagger),
     )
 
 
@@ -289,10 +286,14 @@ def test_empty_training_zeroes_lambdas():
 
 
 def test_repeated_train_rebuilds_state():
-    t = _trained_tagger()
-    before = _count_snapshot(t)
+    t = _trained_tagger(_AMBIGUITY_TRAIN)
+    t.tag(["doodad"])
+    assert t._candidate_tags_cache
+
     t.train(_TRAIN)
-    assert _count_snapshot(t) == before
+
+    assert not t._candidate_tags_cache
+    _assert_model_state_equal(t, _trained_tagger(_TRAIN))
 
 
 @pytest.mark.parametrize(
@@ -321,7 +322,7 @@ def test_eos_follows_sentence_final_punctuation(tagger):
     dot_state = _state(tagger, ".", ".")
 
     expected_bigram_count = 0
-    expected_trigram_counts: dict = {}
+    expected_trigram_counts = {}
 
     for sent in _TRAIN:
         if not sent or sent[-1][0] != ".":
@@ -342,7 +343,7 @@ def test_empty_sentences_do_not_record_eos_at_bos():
     assert _EOS not in t._tag_trigrams[(_BOS, _BOS)]
 
 
-def test_decode_does_not_grow_trained_structures(tagger):
+def test_decode_does_not_mutate_trained_state(tagger):
     before = _decode_mutation_snapshot(tagger)
 
     for word in _OOV_WORDS:
@@ -497,9 +498,6 @@ def test_trained_tagger_round_trips_through_pickle(tagger):
 
     restored = pickle.loads(pickle.dumps(tagger))
     _assert_model_state_equal(restored, tagger)
-    assert restored._beam_threshold == tagger._beam_threshold
-    assert restored._use_capitalization == tagger._use_capitalization
-    assert restored._unk_trained == tagger._unk_trained
 
     for sent in _TRAIN:
         assert restored.tag(_words(sent)) == tagger.tag(_words(sent))

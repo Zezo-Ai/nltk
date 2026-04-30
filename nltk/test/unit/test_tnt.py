@@ -54,8 +54,6 @@ _MODEL_STATE_FIELDS = (
 
 
 class _CountingUnk:
-    """External ``unk`` mock that records ``train()`` calls."""
-
     def __init__(self):
         self.train_calls = 0
 
@@ -67,8 +65,6 @@ class _CountingUnk:
 
 
 class _AlternatingUnk:
-    """Returns NN, then JJ, then NN, ... — used to detect cache reuse."""
-
     def __init__(self):
         self.flip = False
 
@@ -387,8 +383,6 @@ def test_external_unk_bypasses_decode_cache():
     ids=["extra_tags", "no_tags"],
 )
 def test_external_unk_returning_wrong_count_raises_clear_error(unk_class, expected_n):
-    """A misbehaving external ``unk`` must raise ``ValueError`` with the
-    actual count, not a cryptic ``too many values to unpack``."""
     t = _trained_tagger(unk=unk_class())
     with pytest.raises(ValueError, match=f"returned {expected_n} tags for 1 word"):
         t.tag(["xyzzy"])
@@ -416,7 +410,6 @@ def test_threshold_pruning_does_not_empty_beam_under_ambiguity():
 
 
 def test_decode_is_repeat_stable_under_near_tie_beam():
-    """Strict ``>`` keeps the first encountered path when scores tie."""
     t = _trained_tagger(_AMBIGUITY_TRAIN, N=1000)
     _assert_decode_stable(t, ["the", "fish", "swims", "."], repeats=10)
 
@@ -426,8 +419,6 @@ def test_decode_is_repeat_stable_under_near_tie_beam():
     [pytest.param(_TRAIN, id="full"), pytest.param(_TRAIN[:1], id="one_sent")],
 )
 def test_decode_handles_oov_heavy_sentence_with_shared_suffixes(train):
-    """OOV-heavy input should be well-formed, trained-tagset bounded,
-    and repeat-stable even with tiny training data."""
     t = _trained_tagger(train)
     out = _assert_decode_stable(t, _OOV_HEAVY_SENT)
 
@@ -445,8 +436,6 @@ def test_decode_handles_long_ambiguous_sentence():
 
 
 def test_candidate_cache_stable_across_repeated_sentence(tagger):
-    """The candidate-tags cache should not grow on a repeat pass over
-    the same sentence."""
     sent = _OOV_WORDS[:2] + ["the", "cat"]
     tagger.tag(sent)
     size_after_first = len(tagger._candidate_tags_cache)
@@ -515,12 +504,10 @@ def test_trained_tagger_round_trips_through_pickle(tagger):
 
 
 def test_train_order_invariance_at_model_level(reordered_taggers):
-    """Reordering training sentences must not change the trained model."""
     _assert_model_state_equal(*reordered_taggers)
 
 
 def test_decode_is_bit_stable_across_train_data_reorderings(reordered_taggers):
-    """Decoded output is bit-stable across equivalent training-data orderings."""
     a, b = reordered_taggers
     for sent in _TRAIN:
         assert a.tag(_words(sent)) == b.tag(_words(sent))

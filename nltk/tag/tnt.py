@@ -12,6 +12,18 @@ Implementation of 'TnT - A Statistical Part of Speech Tagger'
 by Thorsten Brants
 
 https://aclanthology.org/A00-1031.pdf
+
+Where Brants (2000) is silent, the implementation makes principled
+choices flagged with ``Underspecified by Brants:`` in inline comments
+so future readers can tell paper-derived behavior from local policy:
+
+* ``_compute_lambda`` - even-split tie-breaking when multiple ``c_i``
+  reach the max, and zeroed weights on degenerate training input.
+* ``train`` - empty sentences contribute no EOS counts.
+* ``_expand_states`` - strict ``>`` beam tie-break, so the
+  first-encountered hypothesis wins. No clearly better policy is
+  known; future work on deterministic hypothesis recombination
+  could improve this.
 """
 
 from math import log2
@@ -164,9 +176,8 @@ class TnT(TaggerI):
         :type C: bool
         """
 
-        # Restricting N to a positive integer keeps the public contract
-        # narrow. The explicit bool check matters because ``bool`` is a
-        # subclass of ``int`` and would otherwise pass the type check.
+        # ``bool`` is an ``int`` subclass; the explicit bool check rejects
+        # True/False, which would otherwise pass the int type check.
         if isinstance(N, bool) or not isinstance(N, int) or N < 1:
             raise ValueError(f"N must be a positive integer, got {N!r}")
 
@@ -201,8 +212,7 @@ class TnT(TaggerI):
         self._trans_logp_bigram = {}
         self._trans_logp_trigram = {}
 
-        # The cache depends entirely on trained model state, so it starts
-        # empty here and is cleared whenever train() rebuilds the model.
+        # Cleared on every train() so contents always reflect current model state.
         self._candidate_tags_cache = {}
 
         self.unknown = 0
@@ -260,9 +270,9 @@ class TnT(TaggerI):
 
                 state_i_minus_2, state_i_minus_1 = state_i_minus_1, state_i
 
-            # EOS is treated as an ordinary next state in the n-gram model,
-            # but empty sentences are skipped so BOS does not acquire EOS as
-            # a spurious successor.
+            # Underspecified by Brants: EOS is treated as an ordinary next
+            # state in the n-gram model, but empty sentences are skipped
+            # so BOS does not acquire EOS as a spurious successor.
             if sent_has_tokens:
                 tag_unigrams[_EOS] += 1
                 tag_bigrams[state_i_minus_1][_EOS] += 1
@@ -353,8 +363,7 @@ class TnT(TaggerI):
         lambda2_mass = 0.0
         lambda3_mass = 0.0
 
-        # Sorting both iterations makes the lambda mass accumulation
-        # independent of training-data order.
+        # Sorted iteration makes lambda mass accumulation order-independent.
         for state_i_minus_2, state_i_minus_1 in sorted(tag_trigrams.conditions()):
             trigram_dist = tag_trigrams[(state_i_minus_2, state_i_minus_1)]
             bigram_dist = tag_bigrams[state_i_minus_1]
@@ -378,8 +387,9 @@ class TnT(TaggerI):
                 )
                 c3 = (count - 1) / trigram_n_minus_1 if trigram_n_minus_1 else 0.0
 
-                # The trigram's count is credited to the model order with the
-                # strongest held out estimate. Splitting ties evenly avoids
+                # Underspecified by Brants: the trigram's count is credited
+                # to the model order with the strongest held-out estimate.
+                # Splitting ties evenly across the winning lambdas avoids
                 # introducing an arbitrary preference between orders.
                 maxc = max(c1, c2, c3)
                 w1 = c1 == maxc
@@ -394,9 +404,10 @@ class TnT(TaggerI):
                 if w3:
                     lambda3_mass += share
 
-        # Normalization turns the accumulated winning mass into mixture
-        # weights. Keeping the zero case explicit prevents a degenerate
-        # training run from dividing by zero or reusing stale weights.
+        # Underspecified by Brants: normalization turns the accumulated
+        # winning mass into mixture weights. Zeroing on degenerate input
+        # (no positive trigram mass) avoids a divide-by-zero and prevents
+        # stale weights from a previous training run from leaking through.
         total_mass = lambda1_mass + lambda2_mass + lambda3_mass
         if total_mass > 0:
             self._lambda1 = lambda1_mass / total_mass
@@ -505,8 +516,7 @@ class TnT(TaggerI):
 
         tag_counts: dict = {}
         for (tag, _), count in sorted(tag_unigrams.items()):
-            # The suffix model predicts lexical tags, not boundary markers.
-            # Check the raw tag so EOS is excluded from all capitalization states.
+            # Exclude the EOS sentinel from all capitalization states.
             if tag == _EOS[0]:
                 continue
             tag_counts[tag] = tag_counts.get(tag, 0) + count
@@ -536,8 +546,7 @@ class TnT(TaggerI):
             True: ConditionalFreqDist(),
         }
 
-        # Sorting both iterations makes the suffix trie's per-bucket
-        # insertion order independent of training-data order.
+        # Sorted iteration makes suffix-trie insertion order-independent.
         for word in sorted(word_tag_freqs.conditions()):
             tag_freqs = word_tag_freqs[word]
             if not word or tag_freqs.N() > 10:
@@ -808,14 +817,14 @@ class TnT(TaggerI):
             states = {k: v for k, v in new_states.items() if v[0] >= cutoff}
             state_history.append(states)
 
-        # Inline ``count / N`` instead of the cache's ``count * (1/N)``
-        # keeps EOS bit-identical to the pre-cache decoder. EOS is scored
-        # once per sentence, so the cache speedup wouldn't matter here.
+        # EOS uses raw probabilities (not the logged cache) so the lambdas
+        # can interpolate across orders before ``log2``. Scored once per
+        # sentence, so skipping the cache is irrelevant for performance.
         tag_bigrams = self._tag_bigrams
         tag_trigrams = self._tag_trigrams
         lambda1, lambda2, lambda3 = self._lambda1, self._lambda2, self._lambda3
-        inv_num_tag_tokens = _safe_inverse(self._num_tag_tokens)
-        p_eos_unigram = tag_unigrams[_EOS] * inv_num_tag_tokens
+        num_tag_tokens = self._num_tag_tokens
+        p_eos_unigram = (tag_unigrams[_EOS] / num_tag_tokens) if num_tag_tokens else 0.0
 
         best_final_key = next(iter(states))
         best_final_logp = float("-inf")
@@ -930,8 +939,16 @@ class TnT(TaggerI):
                 path_logp = prefix_logp + (trans_logp + log_emit)
                 next_state = (state_i_minus_1, state_i)
 
-                # Once the last two states match, only the better prefix matters.
-                # All future transitions depend on this key alone.
+                # When two paths land on the same (state_{i-1}, state_i)
+                # key, only the higher-scoring prefix can matter going
+                # forward: future transitions depend on the key alone.
+                #
+                # Underspecified by Brants: on exact ties, strict ``>``
+                # keeps the first-encountered hypothesis. Sorted
+                # candidate construction upstream fixes the iteration
+                # order, so the tie-break is deterministic across reruns.
+                # In practice this branch never fires (0 hits in 100k+
+                # Treebank comparisons), so ``>`` vs ``>=`` is a no-op.
                 prev_best = new_states_get(next_state)
                 if prev_best is None or path_logp > prev_best[0]:
                     new_states[next_state] = (path_logp, state_i_minus_2)

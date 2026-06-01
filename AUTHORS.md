@@ -313,6 +313,7 @@
 - scruge1 <https://github.com/scruge1>
 - Ryan Mannion <https://github.com/ryanamannion>
 - Peter Pollak <https://github.com/Syzygy2048/>
+- John Winstead <https://github.com/jhnwnstd/>
 - Bradley Erickson <https://github.com/13rac1>
 - Volodymyr Matsko <https://github.com/Lemm1>
 

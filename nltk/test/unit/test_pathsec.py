@@ -188,3 +188,14 @@ def test_urlopen_honors_set_proxy_and_redirect_validation():
     finally:
         # Teardown: Safely restore the original global opener, leaving no trace of this test
         urllib.request.install_opener(original_opener)
+
+
+def test_streambackedcorpusview_string_fileid_uses_pathsec():
+    from nltk.corpus.reader.util import StreamBackedCorpusView
+
+    outside = os.path.join(os.path.abspath(os.sep), "_nltk_pathsec_test", "secret.txt")
+
+    view = StreamBackedCorpusView(outside, block_reader=lambda stream: [])
+
+    with pytest.raises((ValueError, PermissionError)):
+        view._open()

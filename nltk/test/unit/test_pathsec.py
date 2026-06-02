@@ -190,12 +190,18 @@ def test_urlopen_honors_set_proxy_and_redirect_validation():
         urllib.request.install_opener(original_opener)
 
 
-def test_streambackedcorpusview_string_fileid_uses_pathsec():
+def test_streambackedcorpusview_string_fileid_uses_pathsec(tmp_path, monkeypatch):
+    from pathlib import Path
+
     from nltk.corpus.reader.util import StreamBackedCorpusView
 
-    outside = os.path.join(os.path.abspath(os.sep), "_nltk_pathsec_test", "secret.txt")
+    blocked_file = tmp_path / "secret.txt"
+    blocked_file.write_text("secret", encoding="utf-8")
 
-    view = StreamBackedCorpusView(outside, block_reader=lambda stream: [])
+    monkeypatch.setattr(pathsec, "_get_allowed_roots", lambda: set())
+    monkeypatch.setattr(os, "getcwd", lambda: str(Path(tmp_path).parent / "elsewhere"))
+
+    view = StreamBackedCorpusView(str(blocked_file), block_reader=lambda stream: [])
 
     with pytest.raises((ValueError, PermissionError)):
         view._open()

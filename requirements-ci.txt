@@ -10,6 +10,6 @@ pytest-mock
 pytest-xdist[psutil]
 pyyaml
 regex
-scikit-learn
+scikit-learn==1.7.2
 tqdm
 twython

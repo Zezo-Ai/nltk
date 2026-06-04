@@ -900,7 +900,7 @@ class Synset(_WordNetObject):
             If you are using wordnet 1.6, a fake root will be added for nouns
             as well.
         :return: A score denoting the similarity of the two ``Synset`` objects,
-            normally greater than 0. None is returned if no connecting path
+            normally greater than 0. None is returned if a connecting path
             could be found. If a ``Synset`` is compared with itself, the
             maximum score is returned, which varies depending on the taxonomy
             depth.
@@ -913,11 +913,12 @@ class Synset(_WordNetObject):
             )
 
         need_root = self._needs_root()
+        key = (self._pos, need_root)
 
-        if self._pos not in self._wordnet_corpus_reader._max_depth:
+        if key not in self._wordnet_corpus_reader._max_depth:
             self._wordnet_corpus_reader._compute_max_depth(self._pos, need_root)
 
-        depth = self._wordnet_corpus_reader._max_depth[self._pos]
+        depth = self._wordnet_corpus_reader._max_depth[key]
 
         distance = self.shortest_path_distance(
             other, simulate_root=simulate_root and need_root
@@ -1224,6 +1225,10 @@ class WordNetCorpusReader(CorpusReader):
         # Language data attributes
         self.lg_attrs = ["lemma", "of", "def", "exe"]
 
+        # A cache for the maximum depth used by the lch similarity metric.
+        # Keyed by (pos, simulate_root).
+        self._max_depth = {}
+
     def index_sense(self, version=None):
         """Read sense key to synset id mapping from index.sense file in corpus directory"""
         fn = "index.sense"
@@ -1475,18 +1480,25 @@ class WordNetCorpusReader(CorpusReader):
 
     def _compute_max_depth(self, pos, simulate_root):
         """
-        Compute the max depth for the given part of speech.  This is
+        Compute the max depth for the given part of speech. This is
         used by the lch similarity metric.
         """
+        key = (pos, simulate_root)
+        if key in self._max_depth:
+            return self._max_depth[key]
+
         depth = 0
-        for ii in self.all_synsets(pos):
+        for ss in self.all_synsets(pos):
             try:
-                depth = max(depth, ii.max_depth())
+                depth = max(depth, ss.max_depth())
             except RuntimeError:
-                print(ii)
+                print(ss)
+
         if simulate_root:
             depth += 1
-        self._max_depth[pos] = depth
+
+        self._max_depth[key] = depth
+        return depth
 
     def get_version(self):
         fh = self._data_file(ADJ)

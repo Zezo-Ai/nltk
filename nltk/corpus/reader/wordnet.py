@@ -900,7 +900,7 @@ class Synset(_WordNetObject):
             If you are using wordnet 1.6, a fake root will be added for nouns
             as well.
         :return: A score denoting the similarity of the two ``Synset`` objects,
-            normally greater than 0. None is returned if a connecting path
+            normally greater than 0. None is returned if no connecting path
             could be found. If a ``Synset`` is compared with itself, the
             maximum score is returned, which varies depending on the taxonomy
             depth.
@@ -1170,9 +1170,9 @@ class WordNetCorpusReader(CorpusReader):
         # Map from pos -> offset -> synset
         self._synset_offset_cache = defaultdict(dict)
 
-        # A lookup for the maximum depth of each part of speech.  Useful for
-        # the lch similarity metric.
-        self._max_depth = defaultdict(dict)
+        # A cache for the maximum depth used by the lch similarity metric.
+        # Keyed by (pos, need_root), where need_root indicates whether a simulated root is required..
+        self._max_depth = {}
 
         # Corpus reader containing omw data.
         self._omw_reader = omw_reader
@@ -1224,10 +1224,6 @@ class WordNetCorpusReader(CorpusReader):
 
         # Language data attributes
         self.lg_attrs = ["lemma", "of", "def", "exe"]
-
-        # A cache for the maximum depth used by the lch similarity metric.
-        # Keyed by (pos, simulate_root).
-        self._max_depth = {}
 
     def index_sense(self, version=None):
         """Read sense key to synset id mapping from index.sense file in corpus directory"""

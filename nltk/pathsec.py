@@ -21,7 +21,8 @@ from pathlib import Path
 from urllib.parse import unquote, urlparse
 
 # Security Enforcement Toggle
-ENFORCE = False
+# ENFORCE = False
+ENFORCE = True
 
 _ALLOWED_ROOTS_CACHE = None
 _LAST_DATA_PATHS = None
@@ -205,8 +206,30 @@ def validate_network_url(url_input, context="NetworkIO"):
         return
     try:
         parsed = urlparse(str(url_input))
+
         if parsed.scheme == "file":
-            validate_path(unquote(parsed.path), context=f"{context}.file_scheme")
+            file_path = unquote(parsed.path)
+            netloc = parsed.netloc
+
+            # Only local file:// URIs are allowed.
+            # Reject remote/UNC-style authorities so validation matches actual access.
+            if netloc not in ("", "localhost"):
+                raise OSError(
+                    f"Security Violation [{context}.file_scheme]: "
+                    f"Non-local file URI authority not allowed: {netloc!r}"
+                )
+
+            # Windows file:// URIs arrive like /C:/path/to/file
+            # Convert them to a native absolute path before validation.
+            if (
+                os.name == "nt"
+                and len(file_path) >= 3
+                and file_path[0] == "/"
+                and file_path[2] == ":"
+            ):
+                file_path = file_path[1:]
+
+            validate_path(file_path, context=f"{context}.file_scheme")
             return
 
         if parsed.scheme not in ("http", "https"):

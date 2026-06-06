@@ -401,3 +401,20 @@ def test_validate_network_url_blocks_cgnat(monkeypatch):
     )
     with pytest.raises((PermissionError, ValueError)):
         pathsec.validate_network_url("http://cgnat.invalid.test/x", context="test")
+
+
+def test_streambackedcorpusview_string_fileid_uses_pathsec(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    from nltk.corpus.reader.util import StreamBackedCorpusView
+
+    blocked_file = tmp_path / "secret.txt"
+    blocked_file.write_text("secret", encoding="utf-8")
+
+    monkeypatch.setattr(pathsec, "_get_allowed_roots", lambda: set())
+    monkeypatch.setattr(os, "getcwd", lambda: str(Path(tmp_path).parent / "elsewhere"))
+
+    view = StreamBackedCorpusView(str(blocked_file), block_reader=lambda stream: [])
+
+    with pytest.raises((ValueError, PermissionError)):
+        view._open()

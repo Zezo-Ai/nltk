@@ -13,6 +13,7 @@ import nltk
 import nltk.downloader  # We will inspect this module directly
 from nltk import pathsec
 from nltk.downloader import Downloader
+from nltk.sem.util import read_sents
 
 
 @pytest.fixture(autouse=True)
@@ -418,3 +419,19 @@ def test_streambackedcorpusview_string_fileid_uses_pathsec(tmp_path, monkeypatch
 
     with pytest.raises((ValueError, PermissionError)):
         view._open()
+
+
+def test_read_sents_enforces_pathsec():
+    # 1. Enable strict sandbox
+    pathsec.ENFORCE = True
+
+    # 2. Construct an absolute path that is structurally impossible to be a valid NLTK data root
+    # Using a root-level path like '/nonexistent_nltk_root/file.txt' ensures it
+    # cannot be in the allowed_roots list, avoiding the need for mocks.
+    forbidden_path = os.path.join(os.sep, "nonexistent_nltk_root_XYZ_123", "secret.txt")
+
+    # 3. Verify that attempting to read this file triggers a PermissionError
+    # We catch the exception to verify it's the right type.
+    # If the function succeeds (no exception), the test fails.
+    with pytest.raises(PermissionError, match="Security Violation"):
+        read_sents(forbidden_path)

@@ -176,7 +176,9 @@ from xml.etree import ElementTree
 from defusedxml.ElementTree import parse as safe_parse
 
 import nltk
-from nltk.pathsec import ZipFile, urlopen
+from nltk.pathsec import ZipFile
+from nltk.pathsec import open as pathsec_open
+from nltk.pathsec import urlopen, validate_path
 
 # urllib2 = nltk.internals.import_from_stdlib('urllib2')
 
@@ -816,7 +818,12 @@ class Downloader:
 
                 try:
                     infile = urlopen(info.url)
-                    with open(tmp_filepath, "wb") as outfile:
+                    with pathsec_open(
+                        tmp_filepath,
+                        "wb",
+                        context="Downloader._download_package",
+                        required_root=download_dir,
+                    ) as outfile:
                         num_blocks = max(1, info.size / (1024 * 16))
                         for block in itertools.count():
                             s = infile.read(1024 * 16)
@@ -829,6 +836,11 @@ class Downloader:
                                     min(80, 5 + 75 * (block / num_blocks))
                                 )
                     infile.close()
+                    validate_path(
+                        filepath,
+                        context="Downloader._download_package",
+                        required_root=download_dir,
+                    )
                     os.replace(tmp_filepath, filepath)
                     self._status_cache.pop(info.id, None)
                 except OSError as e:

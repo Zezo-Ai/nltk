@@ -1,3 +1,4 @@
+import hashlib
 import os
 import shutil
 import unittest.mock
@@ -103,6 +104,8 @@ def test_download_package_uses_scoped_pathsec_open(tmp_path):
         filename = os.path.join("corpora", "dummy.txt")
         subdir = "corpora"
         unzip = False
+        sha256_checksum = hashlib.sha256(b"x").hexdigest()
+        checksum = hashlib.md5(b"x").hexdigest()
 
     info = DummyInfo()
     tmp_file = os.path.join(download_dir, info.filename) + ".tmp"
@@ -128,6 +131,14 @@ def test_download_package_uses_scoped_pathsec_open(tmp_path):
         "nltk.downloader.time.time", return_value=0
     ), unittest.mock.patch(
         "nltk.downloader.itertools.count", return_value=iter([0])
+    ), unittest.mock.patch(
+        "nltk.downloader.os.path.getsize", return_value=1
+    ), unittest.mock.patch(
+        "nltk.downloader.sha256_hexdigest",
+        return_value=hashlib.sha256(b"x").hexdigest(),
+    ), unittest.mock.patch(
+        "nltk.downloader.md5_hexdigest",
+        return_value=hashlib.md5(b"x").hexdigest(),
     ), unittest.mock.patch.object(
         Downloader, "status", return_value=Downloader.NOT_INSTALLED
     ):

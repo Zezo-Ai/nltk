@@ -176,6 +176,7 @@ from xml.etree import ElementTree
 from defusedxml.ElementTree import parse as safe_parse
 
 import nltk
+from nltk.data import _check_decompression_bomb
 from nltk.pathsec import ZipFile
 from nltk.pathsec import open as pathsec_open
 from nltk.pathsec import urlopen, validate_path
@@ -2599,6 +2600,14 @@ def _unzip_iter(filename, root, verbose=True):
                 yield ErrorMessage(filename, error)
                 has_violations = True
                 continue
+            # Decompression-bomb check belongs in Phase 1: a bomb member must be
+            # rejected before any (earlier, benign) member is written to disk, so
+            # the validate-then-extract / nothing-is-written contract holds.
+            try:
+                _check_decompression_bomb(zf.getinfo(member))
+            except ValueError as e:
+                yield ErrorMessage(filename, str(e))
+                has_violations = True
 
         if has_violations:
             return

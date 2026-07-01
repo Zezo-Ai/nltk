@@ -22,6 +22,51 @@ TAGWORD = re.compile(r"\(([^\s()]+) ([^\s()]+)\)")
 WORD = re.compile(r"\([^\s()]+ ([^\s()]+)\)")
 EMPTY_BRACKETS = re.compile(r"\s*\(\s*\(")
 
+# Alpino word/category nodes are one-per-line XML elements. ``AlpinoCorpusReader``
+# parses each one by pulling its attributes out with a single linear scan instead
+# of chaining several lazy ``.*?`` groups that rescan the line: the previous
+# patterns backtracked quadratically on a long, malformed ``<node ...`` line
+# (CWE-1333). ``^`` (with re.MULTILINE) plus the ``[^>\n]`` class keep every match
+# inside a single tag on a single line, so each line is scanned at most once.
+ALPINO_NODE = re.compile(
+    r"^[ \t]*<node (?P<body>[^>\n]*?)(?P<selfclose>/?)>", re.MULTILINE
+)
+ALPINO_ATTR = re.compile(r'(\w+)="([^"]*)"')
+# The old substitutions captured ``begin="(\d+)"``, ``pos="(\w+)"``,
+# ``cat="(\w+)"`` and ``word="([^"]+)"``, i.e. they only converted a node when
+# these fields had the expected shape (else the tag was left untouched). Keep
+# those constraints so behaviour is byte-for-byte identical on malformed input --
+# in particular, ``ordered`` output must not emit a non-numeric ``begin`` that
+# would then fail to match ``SORTTAGWRD`` and skew the tagging/ordering.
+ALPINO_DIGITS = re.compile(r"\d+")
+ALPINO_WORD = re.compile(r"\w+")
+
+
+def _alpino_node_to_sexpr(match, ordered):
+    """Convert one Alpino ``<node>`` element to s-expression notation.
+
+    A self-closing ``<node .../>`` is a leaf word node and becomes ``(pos word)``
+    -- or ``(begin pos word)`` when ``ordered`` is set; an opening ``<node ...>``
+    is a category node and becomes ``(cat``. Nodes whose fields do not have the
+    shape the old regexes required are returned unchanged so later substitutions
+    can handle them.
+    """
+    attrs = dict(ALPINO_ATTR.findall(match.group("body")))
+    if match.group("selfclose"):
+        pos, word = attrs.get("pos"), attrs.get("word")
+        if not word or not pos or not ALPINO_WORD.fullmatch(pos):
+            return match.group(0)
+        if ordered:
+            begin = attrs.get("begin")
+            if not begin or not ALPINO_DIGITS.fullmatch(begin):
+                return match.group(0)
+            return f"({begin} {pos} {word})"
+        return f"({pos} {word})"
+    cat = attrs.get("cat")
+    if not cat or not ALPINO_WORD.fullmatch(cat):
+        return match.group(0)
+    return f"({cat}"
+
 
 class BracketParseCorpusReader(SyntaxCorpusReader):
     """
@@ -203,15 +248,7 @@ class AlpinoCorpusReader(BracketParseCorpusReader):
         if t[:10] != "<alpino_ds":
             return ""
         # convert XML to sexpr notation
-        t = re.sub(r'  <node .*? cat="(\w+)".*>', r"(\1", t)
-        if ordered:
-            t = re.sub(
-                r'  <node. *?begin="(\d+)".*? pos="(\w+)".*? word="([^"]+)".*?/>',
-                r"(\1 \2 \3)",
-                t,
-            )
-        else:
-            t = re.sub(r'  <node .*?pos="(\w+)".*? word="([^"]+)".*?/>', r"(\1 \2)", t)
+        t = ALPINO_NODE.sub(lambda m: _alpino_node_to_sexpr(m, ordered), t)
         t = re.sub(r"  </node>", r")", t)
         t = re.sub(r"<sentence>.*</sentence>", r"", t)
         t = re.sub(r"</?alpino_ds.*>", r"", t)

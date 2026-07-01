@@ -1,3 +1,5 @@
+import multiprocessing
+import queue
 from typing import Tuple
 
 import pytest
@@ -419,3 +421,48 @@ class TestCustomDistanceSandbox:
         in_tsv.write_text("a\tb\t0.5\n", encoding="utf-8")
         dist = custom_distance(str(in_tsv))
         assert dist(frozenset(["a"]), frozenset(["b"])) == 0.5
+
+
+# ---------------------------------------------------------------------------
+# jaro_similarity must not be cubic on near-matching strings (CWE-770; CVE-2026-12926)
+# ---------------------------------------------------------------------------
+
+_JARO_TIMEOUT = 20
+# Two near-identical strings: almost every character matches inside the window.
+# The pre-fix ``j not in flagged_2`` list membership made this O(n**3) (~tens of
+# seconds at this size); with a set it is the algorithm's natural O(n**2)
+# (sub-second). It is CPU-only (a few KB of input), so there is no OOM risk.
+_JARO_N = 8000
+
+
+def _jaro_worker(result_q):
+    try:
+        jaro_similarity("a" * _JARO_N, "a" * (_JARO_N - 1) + "b")
+        result_q.put(("ok", None))
+    except BaseException as exc:  # surface to the parent process
+        result_q.put(("error", repr(exc)))
+
+
+def test_jaro_similarity_not_cubic_on_near_matches():
+    """A near-matching pair must compute quickly, not in cubic time (ReDoS-style).
+
+    Runs in a spawned process with a hard timeout and reports status back via a
+    queue, so a regression to the cubic version is terminated (no lingering CPU)
+    and any worker exception is surfaced to the assertion.
+    """
+    ctx = multiprocessing.get_context("spawn")
+    result_q = ctx.Queue()
+    proc = ctx.Process(target=_jaro_worker, args=(result_q,))
+    proc.start()
+    proc.join(_JARO_TIMEOUT)
+    if proc.is_alive():
+        proc.terminate()
+        proc.join()
+        raise AssertionError(
+            "jaro_similarity did not finish in time -> cubic-time DoS (CWE-770)"
+        )
+    try:
+        status, detail = result_q.get_nowait()
+    except queue.Empty:
+        raise AssertionError("jaro_similarity worker produced no result")
+    assert status == "ok", f"worker raised: {detail}"

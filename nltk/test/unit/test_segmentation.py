@@ -203,3 +203,34 @@ def test_pk_is_linear_not_quadratic():
     finished, exitcode = _finishes_within(_pk_worker, 200_000)
     assert finished, "pk did not finish in time: quadratic blow-up regressed"
     assert exitcode == 0, f"pk worker failed (exit {exitcode})"
+
+
+def test_pk_boundary_free_reference_does_not_divide_by_zero():
+    """A boundary-free reference must not crash pk's default-window derivation.
+
+    With no window size and a reference that contains no boundary symbol,
+    ``ref.count(boundary)`` is 0; pk previously raised an uncaught
+    ``ZeroDivisionError`` (CWE-369). It now derives a window and computes a score.
+    """
+    # Identical boundary-free segmentations -> perfect agreement, no crash.
+    assert pk("0" * 100, "0" * 100) == 0.0
+    # A hyp that introduces a boundary still yields a valid score in [0, 1].
+    score = pk("0" * 100, "0" * 50 + "1" + "0" * 49)
+    assert 0.0 <= score <= 1.0
+
+
+def test_pk_default_window_unchanged_for_segmented_reference():
+    """The derived default window matches the historical formula when the
+    reference has boundaries.
+
+    Uses a case where the score is not trivially 0 (ref != hyp), so the
+    assertion would fail if the default-``k`` derivation ever changed.
+    """
+    ref = "0100" * 100
+    hyp = "1" * 400
+    # Historical default: round(len(ref) / (ref.count(boundary) * 2)).
+    k = int(round(len(ref) / (ref.count("1") * 2.0)))
+    assert k == 2
+    default_score = pk(ref, hyp)
+    assert default_score != 0.0  # non-trivial case: a changed window would differ
+    assert default_score == pk(ref, hyp, k)
